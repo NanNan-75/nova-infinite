@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.3.0
+// Nova 無限流面板 v0.3.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -211,7 +211,8 @@ function applyOpen(obj) {
     const inst = blankInstance();
     Object.assign(inst, {
         name: obj.name || '',
-        hook: obj.hook || '',
+        hook: obj.hook || C().seed?.world || '',
+        hook_type: obj.hook_type || C().seed?.hook_type || '',
         worldline: obj.worldline || '',
         line_type: obj.line_type || '主線',
         difficulty: obj.difficulty || '',
@@ -366,7 +367,7 @@ function endInstance(end) {
     inst.status = end.result || '通關';
     s.ledger.push({
         no: s.ledger.length + 1,
-        instance_id: inst.id, name: inst.name, hook: inst.hook || '', worldline: inst.worldline, line_type: inst.line_type,
+        instance_id: inst.id, name: inst.name, hook: inst.hook || '', hook_type: inst.hook_type || '', worldline: inst.worldline, line_type: inst.line_type,
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
@@ -406,8 +407,12 @@ function recentText() {
     const s = S();
     const recent = s.ledger.slice(-3);
     if (!recent.length) return '（尚無通關紀錄）\n';
-    return recent.map(l =>
-        `- ${l.name}${l.hook ? `「${l.hook}」` : ''}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}`
+    const last5 = s.ledger.slice(-5).map(l => l.hook_type).filter(Boolean);
+    const hi = ['契約羈絆', '遮蔽之人'].map(t => `${t} ${last5.filter(x => x === t).length} 次`).join('、');
+    const usedTypes = recent.map(l => l.hook_type).filter(Boolean);
+    return (usedTypes.length ? `最近三個副本用過的梗型（不得再用）：${usedTypes.join('、')}\n` : '') +
+        `最近五個副本中高頻梗使用次數：${hi}\n` + recent.map(l =>
+        `- ${l.name}${l.hook ? `「${l.hook}」` : ''}${l.hook_type ? `［${l.hook_type}］` : ''}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}`
     ).join('\n') + '\n';
 }
 
@@ -435,7 +440,7 @@ function buildStateText() {
         t += worldlineSealedText();
         if (cs.options?.length) {
             t += '\n【目前提供給玩家的副本選項】（玩家選擇時以此編號回報）\n' +
-                cs.options.map((o, i) => `${i + 1}. ${o.name}｜${o.hook || ''}｜${o.difficulty}｜${o.type}/${o.world_type}/${o.mechanic || '無'}`).join('\n') + '\n';
+                cs.options.map((o, i) => `${i + 1}. ${o.name}｜${o.hook || ''}［${o.hook_type || ''}］｜${o.difficulty}｜${o.type}/${o.world_type}/${o.mechanic || '無'}`).join('\n') + '\n';
         }
         t += '\n' + OPTIONS_TAG_SPEC + '\n';
         return t;
@@ -446,7 +451,7 @@ function buildStateText() {
         t += '【副本開局｜種子卡】\n';
         t += line('核心梗', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
             line('不想要的東西', sd.avoid) + line('卡司指定', sd.cast || '交給 AI') + line('難度', sd.difficulty) +
-            line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline) +
+            line('梗型（已選定）', sd.hook_type) + line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline) +
             line('副本名稱（已選定）', sd.name) + line('副本類型（已選定）', sd.type) + line('世界線類型（已選定）', sd.world_type) +
             line('特殊機制（已選定，封存，正文不得直接說明）', sd.mechanic) + line('預估時長', sd.duration) + line('獎勵等級', sd.reward);
         if (sd.name || sd.type) t += '※ 以上標示「已選定」的項目是玩家在白域大廳選好的副本，開局資料必須沿用，不得更改。\n';
@@ -714,7 +719,7 @@ function onChatChanged() {
 // 玩家選定副本：產生種子卡，等待新聊天套用
 function optionToSeed(o) {
     return {
-        name: o.name || '', world: o.hook || '', difficulty: o.difficulty || '', line_type: o.line_type || '',
+        name: o.name || '', world: o.hook || '', hook_type: o.hook_type || '', difficulty: o.difficulty || '', line_type: o.line_type || '',
         type: o.type || '', world_type: o.world_type || '', mechanic: o.mechanic || '',
         duration: o.duration || '', reward: o.reward || '', from_worldline: o.worldline || '',
     };
@@ -869,7 +874,7 @@ function renderOverview() {
             h += card('副本選項', cs.options.map((o, i) => `
                 <div class="nova-inf-item">
                     <div><b>${i + 1}. ${esc(o.name)}</b>｜${esc(o.difficulty)} 級｜${esc(o.line_type)}</div>
-                    ${o.hook ? `<div class="nova-inf-sub">「${esc(o.hook)}」</div>` : ''}
+                    ${o.hook ? `<div class="nova-inf-sub">「${esc(o.hook)}」${o.hook_type ? `［${esc(o.hook_type)}］` : ''}</div>` : ''}
                     <div class="nova-inf-sub">${esc(o.type)}／${esc(o.world_type)}／${o.mechanic ? (peek ? esc(o.mechanic) : '？？？') : '無機制'}｜${esc(o.duration)}｜獎勵 ${esc(o.reward)}</div>
                     <div class="nova-inf-row">${btn('pick', '選這個', `data-i="${i}"`)}</div>
                 </div>`).join(''), btn('options_clear', '清除選項'));
@@ -887,7 +892,8 @@ function renderOverview() {
         const f = (k, label, ph = '') => `<label class="nova-inf-label">${label}<textarea class="nova-inf-input" rows="2" data-seed="${k}" placeholder="${ph}">${esc(sd[k] || '')}</textarea></label>`;
         h += card('副本種子卡', `
             ${f('name', '副本名稱')}
-            ${f('world', '核心梗（一句話，像書名）', '例：嫁進一座沒有人見過主人的宅邸')}
+            ${f('world', '核心梗（一句話）', '空白＝交給 AI')}
+            ${f('hook_type', '梗型（空白＝交給 AI）', '身分錯置、規則荒誕、倒數、委託、經營、競賽、旅程、封閉、調查、交換、日常異常、守護、逃離……')}
             ${f('type', '副本類型（空白＝交給 AI）')}
             ${f('world_type', '世界線類型（空白＝交給 AI）')}
             ${sd.mechanic ? `<p class="nova-inf-sub">特殊機制：${peek ? esc(sd.mechanic) : '？？？（已封存）'}</p>` : ''}
@@ -906,7 +912,7 @@ function renderOverview() {
         const cal = inst.calendar || {};
         const remain = inst.time_limit_days ? inst.time_limit_days - (cal.day || 1) : null;
         h += card(esc(inst.name || '未命名副本'), `
-            ${inst.hook ? `<p class="nova-inf-sub">「${esc(inst.hook)}」</p>` : ''}
+            ${inst.hook ? `<p class="nova-inf-sub">「${esc(inst.hook)}」${inst.hook_type ? `［${esc(inst.hook_type)}］` : ''}</p>` : ''}
             <p>${esc(inst.line_type)}｜${esc(inst.difficulty)} 級｜${esc(inst.worldline)}｜狀態：${esc(inst.status)}</p>
             <p>${esc(inst.axes.type)}／${esc(inst.axes.world)}／${inst.axes.mechanic ? (inst.mechanic_revealed || peek ? esc(inst.axes.mechanic) : '？？？') : '無機制'}</p>
             <p>第 <b>${inst.current_act}</b> 幕／共 ${inst.total_acts} 幕</p>
@@ -1041,7 +1047,7 @@ function renderWorlds() {
     const s = S();
     const ledgerHtml = s.ledger.map((l, i) => ({ l, i })).reverse().map(({ l, i }) => `
         <div class="nova-inf-item">#${l.no}｜<b>${esc(l.name)}</b>｜${esc(l.worldline)}｜${esc(l.line_type)}｜${esc(l.difficulty)}｜${esc(l.result)}
-        ${l.hook ? `<div class="nova-inf-sub">「${esc(l.hook)}」</div>` : ''}
+        ${l.hook ? `<div class="nova-inf-sub">「${esc(l.hook)}」${l.hook_type ? `［${esc(l.hook_type)}］` : ''}</div>` : ''}
         <div class="nova-inf-sub">${esc(l.axes?.type)}／${esc(l.axes?.world)}／${esc(l.axes?.mechanic || '無')}｜${esc(l.exit_type)}｜${esc(l.date)}</div>
         <div class="nova-inf-row">${btn('ledger_del', '刪除這筆', `data-i="${i}"`)}</div></div>`).join('');
     const wlHtml = s.worldlines.map((w, i) => `
@@ -1296,7 +1302,7 @@ function onBodyClick(ev) {
         case 'peek_off': peek = false; renderPanel(); break;
 
         case 'edit_basic': if (inst) {
-            const keys = ['name', 'hook', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status'];
+            const keys = ['name', 'hook', 'hook_type', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status'];
             const data = {}; keys.forEach(k => data[k] = inst[k]);
             if (!peek && inst.axes.mechanic && !inst.mechanic_revealed) data.axes = Object.assign({}, inst.axes, { mechanic: '（未揭露，解鎖封存後才可編輯）' });
             openEditor('副本基本資料', data, v => {
