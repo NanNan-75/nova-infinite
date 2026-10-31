@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.2.0
+// Nova 無限流面板 v0.2.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC } from './rules.js';
@@ -429,6 +429,7 @@ function buildStateText() {
         t += `碎片：${inv.shards || 0}\n`;
         t += `持有道具：${inv.items.filter(i => i.carry_rule !== '僅限本副本').map(i => i.name).join('、') || '無'}\n`;
         t += `已通關副本數：${s.ledger.length}\n`;
+        if (s.glossary_global.length) t += '白域通用詞彙：\n' + s.glossary_global.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
         t += '最近三個副本（防重複對照）：\n' + recentText();
         t += worldlineSealedText();
         return t;
@@ -681,6 +682,17 @@ function onChatChanged() {
     renderPanel();
 }
 
+// 清掉這個聊天的副本與快照，換到指定模式
+function resetChatInstance(mode) {
+    const md = ctx().chatMetadata;
+    md[MODULE] = { mode, seed: {}, instance: null, lock: false, snapshots: {} };
+    peek = false;
+    saveSettings();
+    saveChatState();
+    updateInjection();
+    renderPanel();
+}
+
 // 手動修改後的統一存檔
 function commit() {
     takeSnapshot();
@@ -751,6 +763,11 @@ function btn(action, label, extra = '') {
     return `<button class="nova-inf-btn" data-act="${action}" ${extra}>${label}</button>`;
 }
 
+// 單筆刪除按鈕：list 為資料清單名稱，key 為索引或 id
+function delBtn(list, key, label = '刪除') {
+    return `<button class="nova-inf-btn nova-inf-del" data-act="del" data-list="${list}" data-key="${esc(key)}">${label}</button>`;
+}
+
 function renderPanel() {
     const panel = document.getElementById('nova_inf_panel');
     if (!panel || panel.classList.contains('nova-inf-hidden')) return;
@@ -797,7 +814,8 @@ function renderOverview() {
             ${f('difficulty', '難度（空白＝交給 AI）')}
             ${f('line_type', '主線／支線')}
             ${f('from_worldline', '升級自世界線座標（選填）')}
-            <p class="nova-inf-hint">謎底層一律交給 AI 生成並封存，你不會在這裡看到。</p>`);
+            <p class="nova-inf-hint">謎底層一律交給 AI 生成並封存，你不會在這裡看到。</p>`,
+            btn('seed_clear', '清空種子卡'));
     }
 
     if (inst) {
@@ -820,11 +838,12 @@ function renderOverview() {
                 ${btn('prog_plus', '進度 +5%')}
                 ${btn('act_next', '進入下一幕')}
                 ${btn('end_manual', '手動結束副本')}
-            </div>`);
+            </div>
+            <div class="nova-inf-row">${btn('inst_delete', '刪除這個副本（不寫入帳本）')}</div>`);
     }
 
     if (cs.mode === 'settle') {
-        h += card('結算', `<p>副本已結束並寫入帳本。結算劇情跑完後，可切回白域大廳。</p>${btn('to_lobby', '回到白域大廳')}`);
+        h += card('結算', `<p>副本已結束並寫入帳本。結算劇情跑完後，可切回白域大廳。</p><div class="nova-inf-row">${btn('to_lobby', '回到白域大廳')}${btn('new_instance', '在這個聊天開新副本')}</div>`);
     }
     return h;
 }
@@ -833,11 +852,12 @@ function renderPeople() {
     const inst = C().instance;
     if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
     let h = '';
-    h += card('卡司', inst.cast.map(c => `
+    h += card('卡司', inst.cast.map((c, i) => `
         <div class="nova-inf-item">
             <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類 ${c.revealed ? '｜<i>已揭露</i>' : ''}</div>
             <div class="nova-inf-sub">真名：${c.revealed ? esc(c.real_name) : sealedVal(c.real_name)}｜好感：${sealedVal(c.affinity)}</div>
             <div class="nova-inf-sub">資源：${esc(c.resource)}</div>
+            <div class="nova-inf-row">${delBtn('cast', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
 
     h += card('人物', inst.people.map((p, i) => `
@@ -846,10 +866,12 @@ function renderPeople() {
             <div class="nova-inf-sub">表面態度：${esc(p.observed_attitude)}</div>
             <label class="nova-inf-sub">我的筆記（不送給 AI）：
                 <input class="nova-inf-input" data-note="${i}" value="${esc(p.player_note || '')}"></label>
+            <div class="nova-inf-row">${delBtn('people', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_people', '編輯'));
 
-    h += card('勢力', inst.factions.map(f => `
-        <div class="nova-inf-item"><b>${esc(f.name)}</b>｜公開立場：${esc(f.stance)}｜真正目的：${sealedVal(f.true_goal)}</div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_factions', '編輯'));
+    h += card('勢力', inst.factions.map((f, i) => `
+        <div class="nova-inf-item"><b>${esc(f.name)}</b>｜公開立場：${esc(f.stance)}｜真正目的：${sealedVal(f.true_goal)}
+        <div class="nova-inf-row">${delBtn('factions', i)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_factions', '編輯'));
 
     const ic = inst.identity_card || {};
     h += card('我的身份卡', `
@@ -857,7 +879,7 @@ function renderPeople() {
         <p class="nova-inf-sub">${esc(ic.family)}｜限制：${esc(ic.restrictions)}｜範圍：${esc(ic.range)}</p>
         <p class="nova-inf-sub">摩擦：${esc(ic.friction)}</p>
         <p class="nova-inf-sub">${Object.entries(ic.snapshot || {}).filter(([, v]) => v).map(([k, v]) => `${esc(k)}：${esc(v)}`).join('｜')}</p>`,
-        btn('edit_identity', '編輯'));
+        btn('edit_identity', '編輯') + btn('identity_clear', '清空'));
     return h;
 }
 
@@ -880,6 +902,7 @@ function renderClues() {
                     <div class="nova-inf-row">
                         ${c.status !== '已釋出' ? btn('clue_release', '釋出', `data-id="${esc(c.id)}"`) : ''}
                         ${c.status !== '已推翻' ? btn('clue_overturn', '推翻', `data-id="${esc(c.id)}"`) : ''}
+                        ${delBtn('clues', c.id)}
                     </div>
                 </div>`;
             }).join('') || '<p class="nova-inf-empty">本幕沒有線索</p>'}`);
@@ -900,7 +923,9 @@ function renderCalendar() {
         <p>副本第 <b>${cal.day || 1}</b> 天${inst.time_limit_days ? `／時限 ${inst.time_limit_days} 天` : ''}</p>
         <div class="nova-inf-row">${btn('day_plus', '日期 +1')}${btn('edit_calendar', '編輯日曆')}</div>`) +
         card('行程與事件', visible.sort((a, b) => a.day - b.day).map(e => `
-            <div class="nova-inf-item ${e.fired ? 'nova-inf-done' : ''}">第 ${e.day} 天｜${esc(e.title)}${e.sealed ? '（封存）' : ''}${e.fired ? '｜已發生' : ''}</div>`).join('') || '<p class="nova-inf-empty">無</p>') +
+            <div class="nova-inf-item"><span class="${e.fired ? 'nova-inf-done' : ''}">第 ${e.day} 天｜${esc(e.title)}${e.sealed ? '（封存）' : ''}${e.fired ? '｜已發生' : ''}</span>
+            <div class="nova-inf-row">${delBtn('events', e.id)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>',
+            btn('event_add', '＋ 新增行程')) +
         (sealedCount && !peek ? `<p class="nova-inf-hint">另有 ${sealedCount} 個封存事件，到期時會自動提醒 AI。</p>` : '');
 }
 
@@ -910,19 +935,22 @@ function renderBag() {
     return card('背包', `
         <p>碎片：<b>${inv.shards || 0}</b></p>
         ${inv.items.map((it, i) => `<div class="nova-inf-item"><b>${esc(it.name)}</b> ×${it.quantity || 1}｜${esc(it.carry_rule)}｜來源：${esc(it.source)}<div class="nova-inf-sub">${esc(it.description)}</div>${btn('item_del', '丟棄', `data-i="${i}"`)}</div>`).join('') || '<p class="nova-inf-empty">空空的</p>'}`,
-        btn('edit_bag', '編輯')) +
+        btn('item_add', '＋ 新增') + btn('edit_bag', '編輯')) +
         card('現實獎勵', `
-        ${s.rewards.map((r, i) => `<div class="nova-inf-item">${esc(r.instance_name || '')}｜${esc(r.reward_tier || '')}｜願望：${esc(r.wish)}｜${r.redeemed ? '已兌現' : '未兌現'} ${btn('reward_toggle', r.redeemed ? '標記未兌現' : '標記已兌現', `data-i="${i}"`)}</div>`).join('') || '<p class="nova-inf-empty">還沒有許過願</p>'}`,
-        btn('edit_rewards', '編輯'));
+        ${s.rewards.map((r, i) => `<div class="nova-inf-item">${esc(r.instance_name || '')}｜${esc(r.reward_tier || '')}｜願望：${esc(r.wish)}｜${r.redeemed ? '已兌現' : '未兌現'}
+            <div class="nova-inf-row">${btn('reward_toggle', r.redeemed ? '標記未兌現' : '標記已兌現', `data-i="${i}"`)}${delBtn('rewards', i)}</div></div>`).join('') || '<p class="nova-inf-empty">還沒有許過願</p>'}`,
+        btn('reward_add', '＋ 許願') + btn('edit_rewards', '編輯'));
 }
 
 function renderGlossary() {
     const s = S();
     const inst = C().instance;
-    return card('副本辭典', (inst?.glossary || []).map(g => `<div class="nova-inf-item"><b>${esc(g.term)}</b>：${esc(g.desc)}</div>`).join('') || '<p class="nova-inf-empty">無</p>',
-        inst ? btn('edit_glossary', '編輯') : '') +
-        card('白域通用詞彙', s.glossary_global.map(g => `<div class="nova-inf-item"><b>${esc(g.term)}</b>：${esc(g.desc)}</div>`).join('') || '<p class="nova-inf-empty">無</p>',
-        btn('edit_glossary_global', '編輯'));
+    const item = (g, list, i) => `<div class="nova-inf-item"><b>${esc(g.term)}</b>：${esc(g.desc)}<div class="nova-inf-row">${delBtn(list, i)}</div></div>`;
+    return card('副本辭典', (inst?.glossary || []).map((g, i) => item(g, 'glossary', i)).join('') || '<p class="nova-inf-empty">無</p>',
+        inst ? btn('glossary_add', '＋ 新增') + btn('glossary_clear', '清空') + btn('edit_glossary', '編輯') : '') +
+        card('白域通用詞彙', s.glossary_global.map((g, i) => item(g, 'glossary_global', i)).join('') || '<p class="nova-inf-empty">無</p>',
+        btn('glossary_global_add', '＋ 新增') + btn('glossary_global_clear', '清空') + btn('edit_glossary_global', '編輯')) +
+        '<p class="nova-inf-hint">副本辭典只屬於這個聊天的副本，開新副本時會一起清掉；白域通用詞彙則跨副本保留，只在白域大廳送給 AI。</p>';
 }
 
 function renderWorlds() {
@@ -964,7 +992,7 @@ function renderSealed() {
         <div class="nova-inf-item"><b>${esc(c.codename)}</b> ＝ ${esc(c.real_name)}｜好感 ${esc(c.affinity)}｜${esc(c.obsession_stage)}
         <div class="nova-inf-sub">歷程：${esc(c.history_length)}｜關係：${esc(c.relation_type)}</div>
         <div class="nova-inf-sub">未竟之約：${esc(c.promise)}</div></div>`).join(''));
-    h += card('讓渡紀錄', inst.concessions.map(x => `<div class="nova-inf-item">回合 ${x.turn}｜${esc(x.giver)}｜${esc(x.what)}｜${esc(x.form)}<div class="nova-inf-sub">代價：${esc(x.cost)}｜後續：${esc(x.consequence)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_concessions', '編輯'));
+    h += card('讓渡紀錄', inst.concessions.map((x, i) => `<div class="nova-inf-item">回合 ${x.turn}｜${esc(x.giver)}｜${esc(x.what)}｜${esc(x.form)}<div class="nova-inf-sub">代價：${esc(x.cost)}｜後續：${esc(x.consequence)}</div><div class="nova-inf-row">${delBtn('concessions', i)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_concessions', '編輯'));
     return h;
 }
 
@@ -1081,6 +1109,72 @@ function onBodyClick(ev) {
 
     switch (act) {
         case 'to_opening': cs.mode = 'opening'; commit(); break;
+        case 'new_instance':
+            if (confirm('在這個聊天開新副本？目前的副本資料會從這個聊天移除（帳本裡的紀錄不受影響）。')) {
+                resetChatInstance('opening');
+            }
+            break;
+        case 'inst_delete':
+            if (confirm('刪除這個副本？不會寫入帳本，副本中取得的「僅限本副本」道具也會一起移除。')) {
+                const id = inst?.id;
+                if (id) s.inventory.items = s.inventory.items.filter(it => !(it.instance_id === id && it.carry_rule === '僅限本副本'));
+                resetChatInstance('off');
+            }
+            break;
+        case 'seed_clear': if (confirm('清空種子卡？')) { cs.seed = {}; commit(); } break;
+        case 'identity_clear': if (inst && confirm('清空身份卡？')) { inst.identity_card = blankInstance().identity_card; commit(); } break;
+        case 'del': {
+            const list = b.dataset.list;
+            const key = b.dataset.key;
+            const lists = {
+                cast: () => inst?.cast, people: () => inst?.people, factions: () => inst?.factions,
+                clues: () => inst?.clues, events: () => inst?.calendar?.events, glossary: () => inst?.glossary,
+                concessions: () => inst?.concessions, glossary_global: () => s.glossary_global, rewards: () => s.rewards,
+            };
+            const arr = lists[list]?.();
+            if (!arr) break;
+            const byId = list === 'clues' || list === 'events';
+            const idx = byId ? arr.findIndex(x => x.id === key) : Number(key);
+            if (idx < 0 || idx >= arr.length) break;
+            if (!confirm('確定刪除這一筆？')) break;
+            arr.splice(idx, 1);
+            commit();
+            break;
+        }
+        case 'event_add': if (inst) {
+            const day = Number(prompt('第幾天？', String(inst.calendar.day || 1)));
+            if (!day) break;
+            const title = prompt('行程內容');
+            if (!title) break;
+            inst.calendar.events.push({ id: 'e_' + Date.now(), day, title, sealed: false, fired: false });
+            commit();
+        } break;
+        case 'glossary_add': case 'glossary_global_add': {
+            const term = prompt('名詞'); if (!term) break;
+            const desc = prompt('解釋') || '';
+            const arr = act === 'glossary_add' ? inst?.glossary : s.glossary_global;
+            if (!arr) break;
+            arr.push({ term, desc, revealed: true });
+            commit();
+            break;
+        }
+        case 'glossary_clear': if (inst && confirm('清空本副本辭典？')) { inst.glossary = []; commit(); } break;
+        case 'glossary_global_clear': if (confirm('清空白域通用詞彙？')) { s.glossary_global = []; commit(); } break;
+        case 'reward_add': {
+            const wish = prompt('許下的願望'); if (!wish) break;
+            const last = s.ledger[s.ledger.length - 1];
+            s.rewards.push({ instance_name: last?.name || '', reward_tier: last?.reward_tier || '', wish, redeemed: false });
+            commit();
+            break;
+        }
+        case 'item_add': {
+            const name = prompt('道具名稱'); if (!name) break;
+            const description = prompt('說明') || '';
+            const carry = prompt('攜帶規則（僅限本副本／可帶回白域／可帶回現實）', '可帶回白域') || '可帶回白域';
+            s.inventory.items.push({ name, description, source: '手動新增', quantity: 1, single_use: false, carry_rule: carry, instance_id: inst?.id || '' });
+            commit();
+            break;
+        }
         case 'to_lobby': cs.mode = 'lobby'; commit(); break;
         case 'lock': cs.lock = !cs.lock; commit(); break;
         case 'day_plus': if (inst) { inst.calendar.day = (inst.calendar.day || 1) + 1; commit(); } break;
@@ -1201,9 +1295,7 @@ function onBodyClick(ev) {
         }
         case 'reset_chat':
             if (confirm('清除這個聊天的副本狀態與快照？模式會回到「關閉」，聊天內容不會被刪。')) {
-                const md = ctx().chatMetadata;
-                md[MODULE] = { mode: 'off', seed: {}, instance: null, lock: false, snapshots: {} };
-                saveChatState(); updateInjection(); renderPanel();
+                resetChatInstance('off');
             }
             break;
         case 'reset_ledger':
@@ -1251,7 +1343,15 @@ function onBodyChange(ev) {
     const t = ev.target;
     const cs = C();
     const s = S();
-    if (t.dataset.bind === 'mode') { cs.mode = t.value; commit(); return; }
+    if (t.dataset.bind === 'mode') {
+        if (t.value === 'opening' && cs.instance) {
+            if (confirm('這個聊天裡還有上一個副本的資料。要清掉它，開始全新的副本嗎？\n（選「取消」則保留舊資料，只切換模式）')) {
+                resetChatInstance('opening');
+                return;
+            }
+        }
+        cs.mode = t.value; commit(); return;
+    }
     if (t.dataset.seed) { cs.seed[t.dataset.seed] = t.value; saveChatState(); updateInjection(); return; }
     if (t.dataset.note !== undefined) { const p = cs.instance?.people[Number(t.dataset.note)]; if (p) { p.player_note = t.value; commit(); } return; }
     if (t.dataset.ruleOn !== undefined) { s.rules[Number(t.dataset.ruleOn)].enabled = t.checked; saveSettings(); updateInjection(); return; }

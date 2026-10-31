@@ -213,3 +213,14 @@
 @media (max-width: 600px) {
     #nova_inf_panel { width: 100vw; }
 }
+
+/* 擴充設定抽屜裡的按鈕 */
+#nova_inf_settings .menu_button {
+    width: auto;
+    white-space: nowrap;
+    display: inline-flex;
+    padding: 4px 12px;
+}
+
+.nova-inf-del { opacity: 0.6; }
+.nova-inf-del:hover { opacity: 1; border-color: #e57373; color: #e57373; }
