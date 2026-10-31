@@ -339,3 +339,29 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
 - 每回合最多釋出 1 條新線索；若本回合已有讓渡，不再額外釋出。
 - day 為經過的天數（增加量）。
 - 只有副本真正結束時才輸出 instance_end。`;
+
+// 白域大廳：副本選項與選擇的回報格式
+export const OPTIONS_TAG_SPEC = `## 【副本選項：輸出格式】
+當你在正文中向 {{user}} 提供副本選項時，在回覆最末尾輸出一個 <inf_options> 標籤，內容為合法 JSON 陣列，順序與正文中的選項一致：
+
+<inf_options>
+[
+  {
+    "name": "副本名稱",
+    "hook": "核心梗",
+    "difficulty": "E/D/C/B/A/S",
+    "line_type": "主線 或 支線",
+    "type": "副本類型",
+    "world_type": "世界線類型",
+    "mechanic": "特殊機制（正文中可顯示為？？？，但這裡要寫出真正的機制；沒有就留空）",
+    "duration": "預估時長",
+    "reward": "獎勵等級",
+    "worldline": "若為升級副本，填原世界線座標；否則留空"
+  }
+]
+</inf_options>
+
+當 {{user}} 在劇情中明確選定其中一個副本時，在該回合末尾輸出：
+<inf_pick>{"index": 1}</inf_pick>
+index 從 1 開始，對應上一次 <inf_options> 中的順序。若她還在猶豫、詢問或比較，不要輸出。
+選定後，正文停在她即將被傳送進副本的那一刻，不要寫進入副本後的內容。`;

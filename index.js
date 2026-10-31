@@ -1,7 +1,7 @@
-// Nova 無限流面板 v0.2.2
+// Nova 無限流面板 v0.3.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
-import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC } from './rules.js';
+import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
 
 const MODULE = 'nova_infinite';
 const KEY_RULES = 'nova_inf_rules';
@@ -72,6 +72,7 @@ function defaultSettings() {
         rewards: [],
         glossary_global: [],
         deletedRuleIds: [],
+        pendingSeed: null,
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
     };
 }
@@ -432,6 +433,11 @@ function buildStateText() {
         if (s.glossary_global.length) t += '白域通用詞彙：\n' + s.glossary_global.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
         t += '最近三個副本（防重複對照）：\n' + recentText();
         t += worldlineSealedText();
+        if (cs.options?.length) {
+            t += '\n【目前提供給玩家的副本選項】（玩家選擇時以此編號回報）\n' +
+                cs.options.map((o, i) => `${i + 1}. ${o.name}｜${o.hook || ''}｜${o.difficulty}｜${o.type}/${o.world_type}/${o.mechanic || '無'}`).join('\n') + '\n';
+        }
+        t += '\n' + OPTIONS_TAG_SPEC + '\n';
         return t;
     }
 
@@ -440,7 +446,10 @@ function buildStateText() {
         t += '【副本開局｜種子卡】\n';
         t += line('核心梗', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
             line('不想要的東西', sd.avoid) + line('卡司指定', sd.cast || '交給 AI') + line('難度', sd.difficulty) +
-            line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline);
+            line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline) +
+            line('副本名稱（已選定）', sd.name) + line('副本類型（已選定）', sd.type) + line('世界線類型（已選定）', sd.world_type) +
+            line('特殊機制（已選定，封存，正文不得直接說明）', sd.mechanic) + line('預估時長', sd.duration) + line('獎勵等級', sd.reward);
+        if (sd.name || sd.type) t += '※ 以上標示「已選定」的項目是玩家在白域大廳選好的副本，開局資料必須沿用，不得更改。\n';
         t += '最近三個副本（防重複對照，三軸與男主身份類別不得重複）：\n' + recentText();
         t += worldlineSealedText();
         t += '\n' + OPEN_TAG_SPEC + '\n';
@@ -607,10 +616,29 @@ function onMessageReceived(mesId) {
         else toast('回合標籤解析失敗（原文已保存在訊息資料中）', 'warning');
     }
 
-    if (open.found.length || turn.found.length) {
+    const opts = extractTags(text, 'inf_options');
+    text = opts.cleaned;
+    for (const raw of opts.found) {
+        const arr = parseJsonLoose(raw);
+        if (Array.isArray(arr) && arr.length) { cs.options = arr; logs.push(`收到 ${arr.length} 個副本選項`); }
+        else toast('副本選項標籤解析失敗', 'warning');
+    }
+    const pick = extractTags(text, 'inf_pick');
+    text = pick.cleaned;
+    for (const raw of pick.found) {
+        const obj = parseJsonLoose(raw);
+        const idx = Number(obj?.index) - 1;
+        if (cs.options?.[idx]) logs.push(pickOption(idx));
+    }
+    const tagCount = open.found.length + turn.found.length + opts.found.length + pick.found.length;
+
+    if (tagCount) {
         text = text.replace(/\s+$/, '');
         msg.extra = msg.extra || {};
-        msg.extra.nova_inf_raw = [...open.found.map(x => `<inf_open>${x}</inf_open>`), ...turn.found.map(x => `<inf>${x}</inf>`)].join('\n');
+        msg.extra.nova_inf_raw = [
+            ...open.found.map(x => `<inf_open>${x}</inf_open>`), ...turn.found.map(x => `<inf>${x}</inf>`),
+            ...opts.found.map(x => `<inf_options>${x}</inf_options>`), ...pick.found.map(x => `<inf_pick>${x}</inf_pick>`),
+        ].join('\n');
         msg.extra.nova_inf_cleaned = true;
         msg.mes = text;
         if (Array.isArray(msg.swipes) && msg.swipe_id !== undefined) msg.swipes[msg.swipe_id] = text;
@@ -678,8 +706,45 @@ function onDeleted() {
 
 function onChatChanged() {
     peek = false;
+    applyPendingSeed();
     updateInjection();
     renderPanel();
+}
+
+// 玩家選定副本：產生種子卡，等待新聊天套用
+function optionToSeed(o) {
+    return {
+        name: o.name || '', world: o.hook || '', difficulty: o.difficulty || '', line_type: o.line_type || '',
+        type: o.type || '', world_type: o.world_type || '', mechanic: o.mechanic || '',
+        duration: o.duration || '', reward: o.reward || '', from_worldline: o.worldline || '',
+    };
+}
+
+function pickOption(idx) {
+    const cs = C();
+    const s = S();
+    const o = cs.options?.[idx];
+    if (!o) return '';
+    s.pendingSeed = optionToSeed(o);
+    saveSettings();
+    return `已選定「${o.name}」：開一個新聊天就會自動進入副本開局`;
+}
+
+// 新聊天開啟時，套用待用的種子卡
+function applyPendingSeed() {
+    const s = S();
+    const cs = C();
+    if (!s.pendingSeed || !cs) return false;
+    const chat = ctx().chat || [];
+    const fresh = cs.mode === 'off' && !cs.instance && chat.filter(m => m.is_user).length === 0;
+    if (!fresh) return false;
+    cs.mode = 'opening';
+    cs.seed = Object.assign({}, s.pendingSeed);
+    s.pendingSeed = null;
+    saveSettings();
+    saveChatState();
+    toast(`已進入副本開局：${cs.seed.name || ''}。可以在面板補充種子卡，然後送出第一則訊息。`, 'success');
+    return true;
 }
 
 // 清掉這個聊天的副本與快照，換到指定模式
@@ -800,13 +865,32 @@ function renderOverview() {
         h += card('白域大廳', `
             <p>碎片：<b>${s.inventory.shards || 0}</b>｜已通關：<b>${s.ledger.length}</b></p>
             ${btn('to_opening', '在這個聊天開始副本開局')}`);
+        if (cs.options?.length) {
+            h += card('副本選項', cs.options.map((o, i) => `
+                <div class="nova-inf-item">
+                    <div><b>${i + 1}. ${esc(o.name)}</b>｜${esc(o.difficulty)} 級｜${esc(o.line_type)}</div>
+                    ${o.hook ? `<div class="nova-inf-sub">「${esc(o.hook)}」</div>` : ''}
+                    <div class="nova-inf-sub">${esc(o.type)}／${esc(o.world_type)}／${o.mechanic ? (peek ? esc(o.mechanic) : '？？？') : '無機制'}｜${esc(o.duration)}｜獎勵 ${esc(o.reward)}</div>
+                    <div class="nova-inf-row">${btn('pick', '選這個', `data-i="${i}"`)}</div>
+                </div>`).join(''), btn('options_clear', '清除選項'));
+        }
+    }
+    if (s.pendingSeed) {
+        h += card('已選定的副本', `
+            <p><b>${esc(s.pendingSeed.name)}</b>｜${esc(s.pendingSeed.difficulty)} 級</p>
+            <p class="nova-inf-hint">開一個新聊天，插件會自動切到「副本開局」並填好種子卡。</p>
+            <div class="nova-inf-row">${btn('pending_here', '直接在這個聊天開局')}${btn('pending_cancel', '取消選擇')}</div>`);
     }
 
     if (cs.mode === 'opening' || cs.mode === 'lobby') {
         const sd = cs.seed || {};
         const f = (k, label, ph = '') => `<label class="nova-inf-label">${label}<textarea class="nova-inf-input" rows="2" data-seed="${k}" placeholder="${ph}">${esc(sd[k] || '')}</textarea></label>`;
         h += card('副本種子卡', `
+            ${f('name', '副本名稱')}
             ${f('world', '核心梗（一句話，像書名）', '例：嫁進一座沒有人見過主人的宅邸')}
+            ${f('type', '副本類型（空白＝交給 AI）')}
+            ${f('world_type', '世界線類型（空白＝交給 AI）')}
+            ${sd.mechanic ? `<p class="nova-inf-sub">特殊機制：${peek ? esc(sd.mechanic) : '？？？（已封存）'}</p>` : ''}
             ${f('mood', '想要的氛圍', '例：華麗但壓抑、慢熱')}
             ${f('scenes', '想要的名場面（選填）', '例：一場必須戴面具參加的舞會')}
             ${f('avoid', '不想要的東西', '例：大量戰鬥')}
@@ -1109,6 +1193,19 @@ function onBodyClick(ev) {
 
     switch (act) {
         case 'to_opening': cs.mode = 'opening'; commit(); break;
+        case 'pick': { const r = pickOption(Number(b.dataset.i)); if (r) toast(r, 'success'); renderPanel(); break; }
+        case 'options_clear': cs.options = []; commit(); break;
+        case 'pending_cancel': s.pendingSeed = null; saveSettings(); renderPanel(); break;
+        case 'pending_here':
+            if (cs.instance && !confirm('這個聊天還有舊副本的資料，要清掉並開始新副本嗎？')) break;
+            {
+                const seed = Object.assign({}, s.pendingSeed);
+                s.pendingSeed = null;
+                const md = ctx().chatMetadata;
+                md[MODULE] = { mode: 'opening', seed, instance: null, lock: false, snapshots: {}, options: [] };
+                commit();
+            }
+            break;
         case 'new_instance':
             if (confirm('在這個聊天開新副本？目前的副本資料會從這個聊天移除（帳本裡的紀錄不受影響）。')) {
                 resetChatInstance('opening');
