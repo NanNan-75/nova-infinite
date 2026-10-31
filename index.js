@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.7.0
+// Nova 無限流面板 v0.7.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -539,7 +539,7 @@ function buildStateText() {
     if (cs.mode === 'opening') {
         const sd = cs.seed || {};
         t += '【副本開局｜種子卡】\n';
-        t += line('核心梗', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
+        t += line('主線任務', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
             line('不想要的東西', sd.avoid) + line('卡司指定', sd.cast || '交給 AI') + line('難度', sd.difficulty) +
             line('梗型（已選定）', sd.hook_type) + line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline) +
             line('副本名稱（已選定）', sd.name) + line('副本類型（已選定）', sd.type) + line('世界線類型（已選定）', sd.world_type) +
@@ -565,7 +565,7 @@ function buildStateText() {
     // instance
     const cal = inst.calendar || {};
     t += '【副本狀態｜唯一可信來源】\n';
-    if (inst.hook) t += `核心梗：${inst.hook}\n`;
+    if (inst.hook) t += `主線任務：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
     t += `時間：${cal.calendar_name || ''} ${cal.date_label || ''} ${cal.time_label || ''}｜副本第 ${cal.day || 1} 天（已在副本中生活 ${fmtDays((cal.day || 1) - 1)}）`;
@@ -1402,7 +1402,7 @@ function renderOverview() {
         h += card('副本種子卡', `
             <p class="nova-inf-hint">空白的欄位都交給 AI。謎底一律由 AI 生成並封存，你不會在這裡看到。</p>
             ${f('name', '副本名稱')}
-            ${f('world', '核心梗（一句話）')}
+            ${f('world', '主線任務（一句話）')}
             ${f('hook_type', '梗型', '身分錯置、規則荒誕、倒數、委託、經營、競賽、旅程、封閉、調查、交換、日常異常、守護、逃離……')}
             ${sd.mechanic ? `<p class="nova-inf-sub">特殊機制：${peek ? esc(sd.mechanic) : '？？？（已封存）'}</p>` : ''}
             <details class="nova-inf-more"><summary>更多欄位（氛圍、名場面、難度……）</summary>
