@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.6.1
+// Nova 無限流面板 v0.6.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -16,7 +16,7 @@ const MODES = {
     settle: '結算',
 };
 
-const SEALED_CAST_KEYS = ['real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage'];
+const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
 const SEALED_FACTION_KEYS = ['true_goal', 'related'];
 const SEALED_THREAD_KEYS = ['target'];
@@ -262,7 +262,7 @@ function normClue(c, i) {
 
 function normCast(c) {
     return Object.assign({
-        codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', appearance: '', revealed: false,
+        codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', this_life: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         last_seen_turn: 0,
     }, c);
@@ -589,6 +589,7 @@ function buildStateText() {
             const gap = inst.turn - (c.last_seen_turn || 0);
             t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜身分${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}\n`;
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
+            if (c.this_life) t += `  【封存】此世性格（言行依據）：${c.this_life}\n`;
             t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
             if (c.role === '主要' && gap >= 5) t += `｜已 ${gap} 回合未出場：待目前場景結束後，以隱藏存在或新場景介入`;
             t += '\n';
@@ -1341,6 +1342,7 @@ function renderSealed() {
     h += card('男主與你的過往', inst.cast.map(c => `
         <div class="nova-inf-item"><b>${esc(c.codename)}</b> ＝ ${esc(c.real_name)}｜好感 ${esc(c.affinity)}｜${esc(c.obsession_stage)}
         <div class="nova-inf-sub">歷程：${esc(c.history_length)}｜關係：${esc(c.relation_type)}</div>
+        <div class="nova-inf-sub">此世性格：${esc(c.this_life)}</div>
         <div class="nova-inf-sub">影響成因：${esc(c.influence)}</div>
         <div class="nova-inf-sub">專屬殘留物：${esc(c.remnant)}</div>
         <div class="nova-inf-sub">未竟之約：${esc(c.promise)}</div></div>`).join(''));
