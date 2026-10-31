@@ -1,0 +1,12 @@
+{
+    "display_name": "Nova 無限流面板",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "楠允",
+    "version": "0.1.0",
+    "homePageUrl": "",
+    "auto_update": true
+}
