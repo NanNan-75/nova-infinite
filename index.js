@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.1.0
+// Nova 無限流面板 v0.2.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC } from './rules.js';
@@ -22,6 +22,7 @@ const SEALED_FACTION_KEYS = ['true_goal'];
 
 let peek = false;          // 本次開啟期間是否解鎖封存（不存檔）
 let currentTab = 'overview';
+let openRuleId = null;     // 規則分頁中展開中的那一條，重繪後保持展開
 let updateMessageBlockFn = null;
 
 // ───────────────────────── 基礎工具 ─────────────────────────
@@ -70,6 +71,8 @@ function defaultSettings() {
         inventory: { shards: 0, items: [] },
         rewards: [],
         glossary_global: [],
+        deletedRuleIds: [],
+        bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
     };
 }
 
@@ -80,9 +83,10 @@ function S() {
     const d = defaultSettings();
     for (const k of Object.keys(d)) if (s[k] === undefined) s[k] = d[k];
     if (!s.inventory.items) s.inventory.items = [];
-    // 新版本新增的預設規則補進來，但不覆蓋你改過的
+    if (!Array.isArray(s.deletedRuleIds)) s.deletedRuleIds = [];
+    // 新版本新增的預設規則補進來；你改過的不覆蓋，你刪掉的不會再長回來
     for (const r of DEFAULT_RULES) {
-        if (!s.rules.find(x => x.id === r.id)) s.rules.push(clone(r));
+        if (!s.rules.find(x => x.id === r.id) && !s.deletedRuleIds.includes(r.id)) s.rules.push(clone(r));
     }
     return s;
 }
@@ -206,6 +210,7 @@ function applyOpen(obj) {
     const inst = blankInstance();
     Object.assign(inst, {
         name: obj.name || '',
+        hook: obj.hook || '',
         worldline: obj.worldline || '',
         line_type: obj.line_type || '主線',
         difficulty: obj.difficulty || '',
@@ -360,7 +365,7 @@ function endInstance(end) {
     inst.status = end.result || '通關';
     s.ledger.push({
         no: s.ledger.length + 1,
-        instance_id: inst.id, name: inst.name, worldline: inst.worldline, line_type: inst.line_type,
+        instance_id: inst.id, name: inst.name, hook: inst.hook || '', worldline: inst.worldline, line_type: inst.line_type,
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
@@ -401,7 +406,7 @@ function recentText() {
     const recent = s.ledger.slice(-3);
     if (!recent.length) return '（尚無通關紀錄）\n';
     return recent.map(l =>
-        `- ${l.name}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}`
+        `- ${l.name}${l.hook ? `「${l.hook}」` : ''}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}`
     ).join('\n') + '\n';
 }
 
@@ -432,7 +437,7 @@ function buildStateText() {
     if (cs.mode === 'opening') {
         const sd = cs.seed || {};
         t += '【副本開局｜種子卡】\n';
-        t += line('世界一句話', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
+        t += line('核心梗', sd.world) + line('想要的氛圍', sd.mood) + line('想要的名場面', sd.scenes) +
             line('不想要的東西', sd.avoid) + line('卡司指定', sd.cast || '交給 AI') + line('難度', sd.difficulty) +
             line('主線／支線', sd.line_type) + line('升級自世界線', sd.from_worldline);
         t += '最近三個副本（防重複對照，三軸與男主身份類別不得重複）：\n' + recentText();
@@ -454,6 +459,7 @@ function buildStateText() {
     // instance
     const cal = inst.calendar || {};
     t += '【副本狀態｜唯一可信來源】\n';
+    if (inst.hook) t += `核心梗：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
     t += `時間：${cal.calendar_name || ''} ${cal.date_label || ''} ${cal.time_label || ''}｜副本第 ${cal.day || 1} 天`;
@@ -610,12 +616,31 @@ function onMessageReceived(mesId) {
         if (logs.filter(Boolean).length) toast(logs.filter(Boolean).join('｜'), 'success');
     }
 
+    scanLeaks(text, open.found.join('\n'));
+
     if (cs.instance) cs.instance.turn = cs.instance.turn || 0;
     takeSnapshot();
     saveSettings();
     saveChatState();
     updateInjection();
     renderPanel();
+}
+
+// 掃描刻板素材與真名洩漏，只提醒不修改
+function scanLeaks(text, openRaw) {
+    const s = S();
+    const cs = C();
+    if (!s.enabled || !cs || !['opening', 'instance'].includes(cs.mode)) return;
+    const words = String(s.bannedWords || '').split(/[,，、\n]/).map(w => w.trim()).filter(Boolean);
+    const hay = `${text}\n${openRaw || ''}`;
+    const hitWords = words.filter(w => hay.includes(w));
+    const hitNames = (cs.instance?.cast || [])
+        .filter(c => !c.revealed && c.real_name && text.includes(c.real_name))
+        .map(c => c.codename);
+    const parts = [];
+    if (hitWords.length) parts.push(`出現禁用素材：${hitWords.join('、')}`);
+    if (hitNames.length) parts.push(`正文出現未揭露的真名（${hitNames.join('、')}）`);
+    if (parts.length) toast(parts.join('｜') + '。可以考慮重新生成。', 'warning');
 }
 
 function onMessageRendered(mesId) {
@@ -764,7 +789,7 @@ function renderOverview() {
         const sd = cs.seed || {};
         const f = (k, label, ph = '') => `<label class="nova-inf-label">${label}<textarea class="nova-inf-input" rows="2" data-seed="${k}" placeholder="${ph}">${esc(sd[k] || '')}</textarea></label>`;
         h += card('副本種子卡', `
-            ${f('world', '世界一句話', '例：一座每到冬天就封港的北方港城')}
+            ${f('world', '核心梗（一句話，像書名）', '例：嫁進一座沒有人見過主人的宅邸')}
             ${f('mood', '想要的氛圍', '例：華麗但壓抑、慢熱')}
             ${f('scenes', '想要的名場面（選填）', '例：一場必須戴面具參加的舞會')}
             ${f('avoid', '不想要的東西', '例：大量戰鬥')}
@@ -779,6 +804,7 @@ function renderOverview() {
         const cal = inst.calendar || {};
         const remain = inst.time_limit_days ? inst.time_limit_days - (cal.day || 1) : null;
         h += card(esc(inst.name || '未命名副本'), `
+            ${inst.hook ? `<p class="nova-inf-sub">「${esc(inst.hook)}」</p>` : ''}
             <p>${esc(inst.line_type)}｜${esc(inst.difficulty)} 級｜${esc(inst.worldline)}｜狀態：${esc(inst.status)}</p>
             <p>${esc(inst.axes.type)}／${esc(inst.axes.world)}／${inst.axes.mechanic ? (inst.mechanic_revealed || peek ? esc(inst.axes.mechanic) : '？？？') : '無機制'}</p>
             <p>第 <b>${inst.current_act}</b> 幕／共 ${inst.total_acts} 幕</p>
@@ -901,14 +927,25 @@ function renderGlossary() {
 
 function renderWorlds() {
     const s = S();
-    return card('通關帳本', s.ledger.slice().reverse().map(l => `
+    const ledgerHtml = s.ledger.map((l, i) => ({ l, i })).reverse().map(({ l, i }) => `
         <div class="nova-inf-item">#${l.no}｜<b>${esc(l.name)}</b>｜${esc(l.worldline)}｜${esc(l.line_type)}｜${esc(l.difficulty)}｜${esc(l.result)}
-        <div class="nova-inf-sub">${esc(l.axes?.type)}／${esc(l.axes?.world)}／${esc(l.axes?.mechanic || '無')}｜${esc(l.exit_type)}｜${esc(l.date)}</div></div>`).join('') || '<p class="nova-inf-empty">尚無紀錄</p>',
-        btn('edit_ledger', '編輯')) +
-        card('世界線紀錄牆', s.worldlines.map(w => `
+        ${l.hook ? `<div class="nova-inf-sub">「${esc(l.hook)}」</div>` : ''}
+        <div class="nova-inf-sub">${esc(l.axes?.type)}／${esc(l.axes?.world)}／${esc(l.axes?.mechanic || '無')}｜${esc(l.exit_type)}｜${esc(l.date)}</div>
+        <div class="nova-inf-row">${btn('ledger_del', '刪除這筆', `data-i="${i}"`)}</div></div>`).join('');
+    const wlHtml = s.worldlines.map((w, i) => `
         <div class="nova-inf-item"><b>${esc(w.coordinate)}</b>｜${esc(w.record_wall_text)}${w.anomaly ? '｜<span class="nova-inf-warn">異常</span>' : ''}
-        <div class="nova-inf-sub">升級：${sealedVal(w.upgrade_status)}｜條件：${sealedVal(w.open_condition)}</div></div>`).join('') || '<p class="nova-inf-empty">尚無紀錄</p>',
-        btn('edit_worldlines', '編輯'));
+        <div class="nova-inf-sub">升級：${sealedVal(w.upgrade_status)}｜條件：${sealedVal(w.open_condition)}</div>
+        <div class="nova-inf-row">${btn('wl_del', '刪除這條世界線', `data-i="${i}"`)}</div></div>`).join('');
+    return card('通關帳本', ledgerHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_ledger', '編輯')) +
+        card('世界線紀錄牆', wlHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_worldlines', '編輯')) +
+        card('清除資料', `
+        <p class="nova-inf-hint">測試用。刪掉的資料無法復原，建議先到「設定」匯出備份。</p>
+        <div class="nova-inf-row">
+            ${btn('reset_chat', '清除這個聊天的副本')}
+            ${btn('reset_ledger', '清空帳本與世界線')}
+            ${btn('reset_all', '清空全部遊玩資料')}
+        </div>
+        <p class="nova-inf-hint">「清空全部遊玩資料」會清掉帳本、世界線、背包、碎片、現實獎勵、白域詞彙，但保留規則與設定。</p>`);
 }
 
 function renderSealed() {
@@ -933,16 +970,29 @@ function renderSealed() {
 
 function renderRules() {
     const s = S();
-    return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI。內容可以直接修改，失焦後自動儲存。</p>` +
+    const missing = DEFAULT_RULES.filter(d => !s.rules.find(r => r.id === d.id)).length;
+    return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI，順序就是送出的順序。標題與內容可以直接修改，點到別處就會自動儲存。</p>
+        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則')}</div>` +
         s.rules.map((r, i) => `
-        <details class="nova-inf-card">
+        <details class="nova-inf-card" ${openRuleId === r.id ? 'open' : ''} data-rule-id="${esc(r.id)}">
             <summary><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
-                <span class="nova-inf-sub">${(r.modes || []).map(m => MODES[m] || m).join('、')}</span></summary>
+                ${r.custom ? '<span class="nova-inf-chip">自訂</span>' : ''}
+                <span class="nova-inf-sub">${(r.modes || []).map(m => MODES[m] || m).join('、') || '未指定模式（不會送出）'}</span></summary>
+            <label class="nova-inf-label">標題<input class="nova-inf-input" data-rule-title="${i}" value="${esc(r.title)}"></label>
             <div class="nova-inf-row">${Object.entries(MODES).filter(([k]) => k !== 'off').map(([k, v]) =>
                 `<label class="nova-inf-chip"><input type="checkbox" data-rule-mode="${i}" value="${k}" ${(r.modes || []).includes(k) ? 'checked' : ''}>${v}</label>`).join('')}</div>
             <textarea class="nova-inf-input nova-inf-rule" rows="10" data-rule-text="${i}">${esc(r.content)}</textarea>
+            <div class="nova-inf-row">
+                ${btn('rule_up', '↑ 上移', `data-i="${i}"`)}
+                ${btn('rule_down', '↓ 下移', `data-i="${i}"`)}
+                ${btn('rule_dup', '複製一份', `data-i="${i}"`)}
+                ${btn('rule_del', '刪除', `data-i="${i}"`)}
+            </div>
         </details>`).join('') +
-        `<div class="nova-inf-row">${btn('rules_reset', '還原預設規則（會覆蓋你的修改）')}</div>`;
+        `<div class="nova-inf-row">
+            ${missing ? btn('rules_restore_missing', `補回被刪掉的預設規則（${missing} 條）`) : ''}
+            ${btn('rules_reset', '全部還原為預設（會刪掉自訂規則與修改）')}
+        </div>`;
 }
 
 function renderSettingsTab() {
@@ -956,6 +1006,9 @@ function renderSettingsTab() {
             </select></label>
         <label class="nova-inf-label">規則深度（選「聊天中」時有效）<input class="nova-inf-input" type="number" data-set="rulesDepth" value="${s.rulesDepth}"></label>
         <label class="nova-inf-label">狀態深度（建議 1）<input class="nova-inf-input" type="number" data-set="stateDepth" value="${s.stateDepth}"></label>`) +
+        card('禁用素材清單', `
+        <p class="nova-inf-hint">AI 的開局資料或正文出現這些詞時，會跳出警告提醒你重新生成（不會自動修改）。用逗號或換行分隔。另外，未揭露身分的男主真名出現在正文時也會警告。</p>
+        <textarea class="nova-inf-input" rows="5" data-set="bannedWords">${esc(s.bannedWords || '')}</textarea>`) +
         card('備份', `
         <div class="nova-inf-row">${btn('export', '匯出全部資料')}${btn('import', '匯入資料')}</div>
         <p class="nova-inf-hint">匯出內容包含封存資料。</p>`) +
@@ -1015,6 +1068,10 @@ function mergeKeys(orig, edited, keys) {
 // ───────────────────────── 互動 ─────────────────────────
 
 function onBodyClick(ev) {
+    const det = ev.target.closest('details[data-rule-id]');
+    if (det && ev.target.closest('summary') && ev.target.tagName !== 'INPUT') {
+        openRuleId = det.open ? null : det.dataset.ruleId;
+    }
     const b = ev.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
@@ -1048,7 +1105,7 @@ function onBodyClick(ev) {
         case 'peek_off': peek = false; renderPanel(); break;
 
         case 'edit_basic': if (inst) {
-            const keys = ['name', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status'];
+            const keys = ['name', 'hook', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status'];
             const data = {}; keys.forEach(k => data[k] = inst[k]);
             if (!peek && inst.axes.mechanic && !inst.mechanic_revealed) data.axes = Object.assign({}, inst.axes, { mechanic: '（未揭露，解鎖封存後才可編輯）' });
             openEditor('副本基本資料', data, v => {
@@ -1083,7 +1140,80 @@ function onBodyClick(ev) {
         case 'edit_concessions': if (inst) openEditor('讓渡紀錄', inst.concessions, v => { inst.concessions = v; }); break;
 
         case 'rules_reset':
-            if (confirm('確定還原所有規則為預設內容？你的修改會消失。')) { s.rules = clone(DEFAULT_RULES); commit(); }
+            if (confirm('確定把所有規則還原為預設？你的修改與自訂規則都會消失。')) { s.rules = clone(DEFAULT_RULES); s.deletedRuleIds = []; commit(); }
+            break;
+        case 'rules_restore_missing':
+            s.deletedRuleIds = [];
+            DEFAULT_RULES.forEach(d => { if (!s.rules.find(r => r.id === d.id)) s.rules.push(clone(d)); });
+            commit();
+            break;
+        case 'rule_add': {
+            const id = 'custom_' + Date.now();
+            s.rules.push({ id, title: '新規則', modes: ['instance'], enabled: true, custom: true, content: '' });
+            openRuleId = id;
+            commit();
+            break;
+        }
+        case 'rule_dup': {
+            const r = s.rules[Number(b.dataset.i)];
+            if (!r) break;
+            const id = 'custom_' + Date.now();
+            s.rules.splice(Number(b.dataset.i) + 1, 0, Object.assign(clone(r), { id, title: r.title + '（複製）', custom: true }));
+            openRuleId = id;
+            commit();
+            break;
+        }
+        case 'rule_del': {
+            const i = Number(b.dataset.i);
+            const r = s.rules[i];
+            if (!r || !confirm(`確定刪除「${r.title}」？`)) break;
+            if (!r.custom && !s.deletedRuleIds.includes(r.id)) s.deletedRuleIds.push(r.id);
+            s.rules.splice(i, 1);
+            commit();
+            break;
+        }
+        case 'rule_up': case 'rule_down': {
+            const i = Number(b.dataset.i);
+            const j = act === 'rule_up' ? i - 1 : i + 1;
+            if (j < 0 || j >= s.rules.length) break;
+            [s.rules[i], s.rules[j]] = [s.rules[j], s.rules[i]];
+            openRuleId = s.rules[j].id;
+            commit();
+            break;
+        }
+
+        case 'ledger_del': {
+            const i = Number(b.dataset.i);
+            const l = s.ledger[i];
+            if (!l || !confirm(`刪除帳本中的「${l.name}」？（不會刪除世界線紀錄）`)) break;
+            s.ledger.splice(i, 1);
+            s.ledger.forEach((x, k) => { x.no = k + 1; });
+            commit();
+            break;
+        }
+        case 'wl_del': {
+            const i = Number(b.dataset.i);
+            const w = s.worldlines[i];
+            if (!w || !confirm(`刪除世界線 ${w.coordinate}？`)) break;
+            s.worldlines.splice(i, 1);
+            commit();
+            break;
+        }
+        case 'reset_chat':
+            if (confirm('清除這個聊天的副本狀態與快照？模式會回到「關閉」，聊天內容不會被刪。')) {
+                const md = ctx().chatMetadata;
+                md[MODULE] = { mode: 'off', seed: {}, instance: null, lock: false, snapshots: {} };
+                saveChatState(); updateInjection(); renderPanel();
+            }
+            break;
+        case 'reset_ledger':
+            if (confirm('清空全部帳本與世界線紀錄？')) { s.ledger = []; s.worldlines = []; commit(); }
+            break;
+        case 'reset_all':
+            if (confirm('清空全部遊玩資料？（帳本、世界線、背包、碎片、現實獎勵、白域詞彙）') && confirm('真的確定嗎？這無法復原。')) {
+                s.ledger = []; s.worldlines = []; s.inventory = { shards: 0, items: [] }; s.rewards = []; s.glossary_global = [];
+                commit();
+            }
             break;
         case 'export': {
             const data = { settings: s, chat: cs };
@@ -1130,9 +1260,17 @@ function onBodyChange(ev) {
         const set = new Set(r.modes || []);
         if (t.checked) set.add(t.value); else set.delete(t.value);
         r.modes = Array.from(set);
-        saveSettings(); updateInjection(); return;
+        openRuleId = r.id;
+        saveSettings(); updateInjection(); renderPanel(); return;
     }
-    if (t.dataset.ruleText !== undefined) { s.rules[Number(t.dataset.ruleText)].content = t.value; saveSettings(); updateInjection(); return; }
+    if (t.dataset.ruleText !== undefined) { const r = s.rules[Number(t.dataset.ruleText)]; r.content = t.value; openRuleId = r.id; saveSettings(); updateInjection(); return; }
+    if (t.dataset.ruleTitle !== undefined) {
+        const r = s.rules[Number(t.dataset.ruleTitle)];
+        r.title = t.value.trim() || '未命名規則';
+        openRuleId = r.id;
+        saveSettings(); renderPanel(); return;
+    }
+    if (t.dataset.set === 'bannedWords') { s.bannedWords = t.value; saveSettings(); return; }
     if (t.dataset.set) {
         const k = t.dataset.set;
         s[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' ? Number(t.value) : t.value);
