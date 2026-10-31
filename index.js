@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.6.2
+// Nova 無限流面板 v0.6.3
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -223,6 +223,7 @@ function applyOpen(obj) {
         difficulty: obj.difficulty || '',
         axes: Object.assign({ type: '', world: '', mechanic: '' }, obj.axes || {}),
         time_limit_days: Number(obj.time_limit_days) || 0,
+        real_time: obj.real_time || '',
         total_acts: Number(obj.total_acts) || (obj.acts?.length || 1),
         ending_range: obj.ending_range || '',
         sealed: Object.assign(inst.sealed, obj.sealed || {}),
@@ -318,7 +319,7 @@ function applyTurn(o) {
 
     if (typeof o.day === 'number' && o.day) {
         inst.calendar.day = (inst.calendar.day || 1) + o.day;
-        log.push(`第 ${inst.calendar.day} 天`);
+        log.push(o.day >= 7 ? `時間經過 ${fmtDays(o.day)}` : `第 ${inst.calendar.day} 天`);
     }
     if (o.date_label) inst.calendar.date_label = o.date_label;
     if (o.time_label) inst.calendar.time_label = o.time_label;
@@ -444,6 +445,7 @@ function endInstance(end) {
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
+        days_spent: inst.calendar?.day || 0, real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
     });
     if (inst.worldline) {
@@ -471,6 +473,16 @@ function endInstance(end) {
 }
 
 // ───────────────────────── 注入 ─────────────────────────
+
+// 天數換算成年、月、日（一年 365 天、一個月 30 天的概算）
+function fmtDays(n) {
+    n = Math.max(0, Math.round(Number(n) || 0));
+    if (n < 60) return `${n} 天`;
+    const y = Math.floor(n / 365);
+    const m = Math.floor((n % 365) / 30);
+    const d = (n % 365) % 30;
+    return [y ? `${y} 年` : '', m ? `${m} 個月` : '', d ? `${d} 天` : ''].filter(Boolean).join(' ');
+}
 
 function line(label, value) {
     return value ? `${label}：${value}\n` : '';
@@ -551,12 +563,13 @@ function buildStateText() {
     if (inst.hook) t += `核心梗：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
-    t += `時間：${cal.calendar_name || ''} ${cal.date_label || ''} ${cal.time_label || ''}｜副本第 ${cal.day || 1} 天`;
+    t += `時間：${cal.calendar_name || ''} ${cal.date_label || ''} ${cal.time_label || ''}｜副本第 ${cal.day || 1} 天（已在副本中生活 ${fmtDays((cal.day || 1) - 1)}）`;
     if (inst.time_limit_days) {
         const remain = inst.time_limit_days - (cal.day || 1);
-        t += `｜時限 ${inst.time_limit_days} 天，剩餘 ${remain} 天`;
-        if (remain < 0) t += `\n⚠ 已超時 ${-remain} 天：依「滯留與強制召回」規則呈現世界不穩與手環警告。`;
+        t += `｜時限 ${fmtDays(inst.time_limit_days)}，剩餘 ${fmtDays(Math.max(0, remain))}`;
+        if (remain < 0) t += `\n⚠ 已超時 ${fmtDays(-remain)}：依「滯留與強制召回」規則呈現世界不穩與手環警告。`;
     }
+    if (inst.real_time) t += `｜現實世界預計經過：${inst.real_time}`;
     t += '\n';
     t += `結局範圍：${inst.ending_range || '依玩家選擇判定'}\n`;
 
@@ -1093,11 +1106,11 @@ function renderOverview() {
             <p class="nova-inf-sub">${esc(inst.line_type)}｜${esc(inst.difficulty)} 級｜${esc(inst.axes.type)}／${esc(inst.axes.world)}／${inst.axes.mechanic ? (inst.mechanic_revealed || peek ? esc(inst.axes.mechanic) : '？？？') : '無機制'}</p>
             <div class="nova-inf-stats">
                 <div><span>幕</span><b>${inst.current_act}/${inst.total_acts}</b></div>
-                <div><span>天數</span><b>${cal.day || 1}${inst.time_limit_days ? `/${inst.time_limit_days}` : ''}</b></div>
+                <div><span>副本內經過</span><b>${fmtDays((cal.day || 1) - 1)}</b></div>
                 <div><span>位置</span><b>${esc(inst.location || '—')}</b></div>
             </div>
             <div class="nova-inf-bar"><div style="width:${inst.act_progress}%"></div></div>
-            <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${remain !== null && remain < 0 ? '｜<span class="nova-inf-warn">已超時</span>' : ''}</p>
+            <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${inst.time_limit_days ? `｜時限 ${fmtDays(inst.time_limit_days)}，剩餘 ${remain < 0 ? '<span class="nova-inf-warn">已超時</span>' : fmtDays(remain)}` : ''}${inst.real_time ? `｜現實約 ${esc(inst.real_time)}` : ''}</p>
             <p>本幕問題：${esc(inst.acts.find(a => a.number === inst.current_act)?.question || '—')}</p>`,
             btn('edit_basic', '編輯'));
         h += card('獨處鎖', `
@@ -1246,7 +1259,7 @@ function renderCalendar() {
     const sealedCount = events.filter(e => e.sealed && !e.fired).length;
     return card('日曆', `
         <p>${esc(cal.calendar_name)}｜${esc(cal.date_label)}｜${esc(cal.time_label)}</p>
-        <p>副本第 <b>${cal.day || 1}</b> 天${inst.time_limit_days ? `／時限 ${inst.time_limit_days} 天` : ''}</p>
+        <p>副本第 <b>${cal.day || 1}</b> 天（已經過 ${fmtDays((cal.day || 1) - 1)}）${inst.time_limit_days ? `／時限 ${fmtDays(inst.time_limit_days)}` : ''}${inst.real_time ? `／現實約 ${esc(inst.real_time)}` : ''}</p>
         <div class="nova-inf-row">${btn('day_plus', '日期 +1')}${btn('edit_calendar', '編輯日曆')}</div>`) +
         card('行程與事件', visible.sort((a, b) => a.day - b.day).map(e => `
             <div class="nova-inf-item"><span class="${e.fired ? 'nova-inf-done' : ''}">第 ${e.day} 天｜${esc(e.title)}${e.sealed ? '（封存）' : ''}${e.fired ? '｜已發生' : ''}</span>
@@ -1310,6 +1323,7 @@ function renderWorlds() {
         <div class="nova-inf-item">#${l.no}｜<b>${esc(l.name)}</b>｜${esc(l.worldline)}｜${esc(l.line_type)}｜${esc(l.difficulty)}｜${esc(l.result)}
         ${l.hook ? `<div class="nova-inf-sub">「${esc(l.hook)}」${l.hook_type ? `［${esc(l.hook_type)}］` : ''}</div>` : ''}
         <div class="nova-inf-sub">${esc(l.axes?.type)}／${esc(l.axes?.world)}／${esc(l.axes?.mechanic || '無')}｜${esc(l.exit_type)}｜${esc(l.date)}</div>
+        ${l.days_spent ? `<div class="nova-inf-sub">副本內 ${fmtDays(l.days_spent)}${l.real_time ? `｜現實 ${esc(l.real_time)}` : ''}</div>` : ''}
         <div class="nova-inf-row">${btn('ledger_del', '🗑 刪除這筆', `data-i="${i}"`, 'danger')}</div></div>`).join('');
     const wlHtml = s.worldlines.map((w, i) => `
         <div class="nova-inf-item"><b>${esc(w.coordinate)}</b>｜${esc(w.record_wall_text)}${w.anomaly ? '｜<span class="nova-inf-warn">異常</span>' : ''}
