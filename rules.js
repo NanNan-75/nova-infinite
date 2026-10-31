@@ -350,6 +350,7 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
   ],
   "cast": [
     {"codename": "代號", "identity": "副本身份", "category": "A/B/C/D", "role": "主要/次要/隱藏存在", "resource": "手中握有的主線資源", "friction": "身份與性格的摩擦點",
+     "appearance": "他在本副本的外型：髮色、瞳色、髮型、膚色、體格、明顯特徵（疤痕等）、穿著風格。髮色瞳色預設為自然色，除非世界設定給出理由",
      "real_name": "真名", "affinity": 100, "history_length": "歷程長度", "relation_type": "關係性質", "influence": "她曾如何改變他", "remnant": "只屬於他們的專屬殘留物", "promise": "未竟之約", "obsession_stage": "錯過/擦肩/重逢/糾纏/深化"}
   ],
   "people": [{"name": "NPC名稱", "identity": "身份", "faction": "勢力", "observed_attitude": "表面上對她的態度", "hidden_truth": "真正立場"}],

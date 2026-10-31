@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.6.0
+// Nova 無限流面板 v0.6.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -262,7 +262,7 @@ function normClue(c, i) {
 
 function normCast(c) {
     return Object.assign({
-        codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', revealed: false,
+        codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         last_seen_turn: 0,
     }, c);
@@ -588,6 +588,7 @@ function buildStateText() {
         inst.cast.forEach(c => {
             const gap = inst.turn - (c.last_seen_turn || 0);
             t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜身分${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}\n`;
+            if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
             t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
             if (c.role === '主要' && gap >= 5) t += `｜已 ${gap} 回合未出場：待目前場景結束後，以隱藏存在或新場景介入`;
             t += '\n';
@@ -1171,6 +1172,7 @@ function renderPeople() {
         <div class="nova-inf-item">
             <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類 ${c.revealed ? '｜<i>已揭露</i>' : ''}</div>
             <div class="nova-inf-sub">真名：${c.revealed ? esc(c.real_name) : sealedVal(c.real_name)}｜好感：${sealedVal(c.affinity)}</div>
+            ${c.appearance ? `<div class="nova-inf-sub">外型：${esc(c.appearance)}</div>` : ''}
             <div class="nova-inf-sub">資源：${esc(c.resource)}</div>
             <div class="nova-inf-row">${delBtn('cast', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
