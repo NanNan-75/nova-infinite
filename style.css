@@ -226,3 +226,5 @@
 .nova-inf-del:hover { opacity: 1; border-color: #e57373; color: #e57373; }
 
 .nova-inf-here { border-left: 3px solid var(--SmartThemeQuoteColor, #8ab4f8); padding-left: 8px; }
+
+.nova-inf-done-soft { opacity: 0.5; border-left: 3px solid rgba(255, 255, 255, 0.15); padding-left: 8px; }

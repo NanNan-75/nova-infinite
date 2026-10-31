@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.4.0
+// Nova 無限流面板 v0.5.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -16,9 +16,10 @@ const MODES = {
     settle: '結算',
 };
 
-const SEALED_CAST_KEYS = ['real_name', 'affinity', 'history_length', 'relation_type', 'promise', 'obsession_stage'];
+const SEALED_CAST_KEYS = ['real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
-const SEALED_FACTION_KEYS = ['true_goal'];
+const SEALED_FACTION_KEYS = ['true_goal', 'related'];
+const SEALED_THREAD_KEYS = ['target'];
 
 let peek = false;          // 本次開啟期間是否解鎖封存（不存檔）
 let currentTab = 'overview';
@@ -73,6 +74,7 @@ function defaultSettings() {
         glossary_global: [],
         deletedRuleIds: [],
         pendingSeed: null,
+        playerProfile: '',
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
     };
 }
@@ -125,7 +127,7 @@ function blankInstance() {
         acts: [], clues: [], cast: [], people: [], factions: [],
         identity_card: { name: '', age: '', social_role: '', family: '', restrictions: '', range: '', friction: '', snapshot: {} },
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
-        glossary: [], concessions: [],
+        glossary: [], concessions: [], threads: [],
         era: { tech_level: '', anachronism: '' },
         map: { regions: [] }, location: '',
         daily_life: [],
@@ -232,7 +234,8 @@ function applyOpen(obj) {
     inst.clues = (obj.clues || []).map((c, i) => normClue(c, i));
     inst.cast = (obj.cast || []).map(normCast);
     inst.people = (obj.people || []).map(p => Object.assign({ name: '', identity: '', faction: '', player_note: '', observed_attitude: '', status: '在場', hidden_truth: '' }, p));
-    inst.factions = (obj.factions || []).map(f => Object.assign({ name: '', stance: '', true_goal: '', related: '' }, f));
+    inst.factions = (obj.factions || []).map(normFaction);
+    inst.threads = (obj.threads || []).map((t, i) => normThread(t, i, 0));
     if (obj.identity_card) inst.identity_card = Object.assign(inst.identity_card, obj.identity_card);
     if (obj.calendar) {
         inst.calendar = Object.assign(inst.calendar, obj.calendar);
@@ -260,9 +263,17 @@ function normClue(c, i) {
 function normCast(c) {
     return Object.assign({
         codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', revealed: false,
-        real_name: '', affinity: 100, history_length: '', relation_type: '', promise: '', obsession_stage: '',
+        real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         last_seen_turn: 0,
     }, c);
+}
+
+function normFaction(f) {
+    return Object.assign({ name: '', stance: '', true_goal: '', related: '' }, f);
+}
+
+function normThread(t, i, turn) {
+    return Object.assign({ id: t.id || `t${i + 1}`, form: '', content: '', target: '', status: '埋下', planted_turn: turn, resolved_turn: null, resolution: '' }, t, { id: t.id || `t${i + 1}` });
 }
 
 function normRegion(r) {
@@ -339,6 +350,33 @@ function applyTurn(o) {
     (o.people_update || []).forEach(u => {
         const p = inst.people.find(x => x.name === u.name);
         if (p) for (const k of Object.keys(u)) if (u[k] !== '' && u[k] !== undefined) p[k] = u[k];
+    });
+
+    (o.faction_add || []).forEach(f => {
+        if (!f.name) return;
+        const ex = inst.factions.find(x => x.name === f.name);
+        if (ex) Object.assign(ex, Object.fromEntries(Object.entries(f).filter(([, v]) => v)));
+        else { inst.factions.push(normFaction(f)); log.push(`新勢力「${f.name}」`); }
+    });
+    (o.faction_update || []).forEach(u => {
+        const f = inst.factions.find(x => x.name === u.name);
+        if (f) for (const k of Object.keys(u)) if (u[k] !== '' && u[k] !== undefined) f[k] = u[k];
+    });
+    if (!inst.threads) inst.threads = [];
+    (o.thread_add || []).forEach(t => {
+        if (!t.content) return;
+        const id = t.id && !inst.threads.find(x => x.id === t.id) ? t.id : `t${inst.threads.length + 1}_${inst.turn}`;
+        inst.threads.push(normThread(Object.assign({}, t, { id }), inst.threads.length, inst.turn));
+        log.push('埋下一條伏筆');
+    });
+    (o.thread_resolve || []).forEach(r => {
+        const id = typeof r === 'string' ? r : r.id;
+        const t = inst.threads.find(x => x.id === id);
+        if (!t || t.status === '已回收') return;
+        t.status = '已回收';
+        t.resolved_turn = inst.turn;
+        if (typeof r === 'object' && r.resolution) t.resolution = r.resolution;
+        log.push(`伏筆 ${id} 已回收`);
     });
 
     const inv = S().inventory;
@@ -490,6 +528,7 @@ function buildStateText() {
             line('副本名稱（已選定）', sd.name) + line('副本類型（已選定）', sd.type) + line('世界線類型（已選定）', sd.world_type) +
             line('特殊機制（已選定，封存，正文不得直接說明）', sd.mechanic) + line('預估時長', sd.duration) + line('獎勵等級', sd.reward);
         if (sd.name || sd.type) t += '※ 以上標示「已選定」的項目是玩家在白域大廳選好的副本，開局資料必須沿用，不得更改。\n';
+        if (s.playerProfile?.trim()) t += '\n【玩家本人檔案】（{{user}} 本人的能力、體質、習慣與禁忌，不因身份卡改變；生成身份卡時需考慮與此的落差）\n' + s.playerProfile.trim() + '\n';
         t += '最近三個副本（防重複對照，三軸與男主身份類別不得重複）：\n' + recentText();
         t += worldlineSealedText();
         t += '\n' + OPEN_TAG_SPEC + '\n';
@@ -549,7 +588,7 @@ function buildStateText() {
         inst.cast.forEach(c => {
             const gap = inst.turn - (c.last_seen_turn || 0);
             t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜身分${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}\n`;
-            t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
+            t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
             if (c.role === '主要' && gap >= 5) t += `｜已 ${gap} 回合未出場：待目前場景結束後，以隱藏存在或新場景介入`;
             t += '\n';
         });
@@ -566,9 +605,30 @@ function buildStateText() {
         t += '\n【勢力】\n';
         inst.factions.forEach(f => { t += `- ${f.name}｜公開立場：${f.stance}｜【封存】真正目的：${f.true_goal}｜相關：${f.related}\n`; });
     }
+    const threads = inst.threads || [];
+    if (threads.length) {
+        const open = threads.filter(x => x.status !== '已回收');
+        const lastTurn = threads.reduce((m, x) => Math.max(m, x.planted_turn || 0), 0);
+        const recentForms = threads.slice(-2).map(x => x.form).filter(Boolean);
+        t += `\n【伏筆】未回收 ${open.length} 條｜距離上次埋伏筆 ${inst.turn - lastTurn} 回合${recentForms.length ? `｜最近用過的形式（不得連續重複）：${recentForms.join('、')}` : ''}\n`;
+        open.forEach(x => {
+            const age = inst.turn - (x.planted_turn || 0);
+            t += `- [${x.id}｜${x.form}｜第 ${x.planted_turn} 回合埋下] ${x.content}｜【封存】指向：${x.target}`;
+            if (age >= 15) t += `｜⚠ 已 ${age} 回合未回收，請在近期安排回收`;
+            t += '\n';
+        });
+        if (open.length > 6) t += '⚠ 未回收伏筆過多，暫停埋新伏筆，優先回收。\n';
+    } else {
+        t += '\n【伏筆】目前沒有任何伏筆。\n';
+    }
+
     if (inst.people.length) {
         t += '\n【人物】\n';
         inst.people.forEach(p => { t += `- ${p.name}｜${p.identity}｜${p.faction}｜${p.status}｜表面態度：${p.observed_attitude}${p.hidden_truth ? `｜【封存】${p.hidden_truth}` : ''}\n`; });
+    }
+
+    if (s.playerProfile?.trim()) {
+        t += '\n【玩家本人檔案】（{{user}} 本人的能力、體質、習慣與禁忌。身份卡賦予她社會身份，但不賦予她本人沒有的技能與體質；未寫明的一律以普通人基準處理）\n' + s.playerProfile.trim() + '\n';
     }
 
     const ic = inst.identity_card || {};
@@ -830,6 +890,7 @@ const TABS = [
     ['glossary', '辭典'],
     ['worlds', '世界線'],
     ['sealed', '封存'],
+    ['profile', '玩家檔案'],
     ['rules', '規則'],
     ['settings', '設定'],
 ];
@@ -897,7 +958,7 @@ function renderPanel() {
     const renderers = {
         overview: renderOverview, people: renderPeople, clues: renderClues, calendar: renderCalendar,
         bag: renderBag, world: renderWorldMap, glossary: renderGlossary, worlds: renderWorlds, sealed: renderSealed,
-        rules: renderRules, settings: renderSettingsTab,
+        profile: renderProfile, rules: renderRules, settings: renderSettingsTab,
     };
     body.innerHTML = renderers[currentTab]();
 }
@@ -1008,6 +1069,7 @@ function renderPeople() {
 
     h += card('勢力', inst.factions.map((f, i) => `
         <div class="nova-inf-item"><b>${esc(f.name)}</b>｜公開立場：${esc(f.stance)}｜真正目的：${sealedVal(f.true_goal)}
+        <div class="nova-inf-sub">相關：${sealedVal(f.related)}</div>
         <div class="nova-inf-row">${delBtn('factions', i)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_factions', '編輯'));
 
     const ic = inst.identity_card || {};
@@ -1045,6 +1107,13 @@ function renderClues() {
             }).join('') || '<p class="nova-inf-empty">本幕沒有線索</p>'}`);
     }
     h += `<div class="nova-inf-row">${btn('edit_clues', '編輯全部線索（會顯示未出現的內容）')}</div>`;
+    const threads = inst.threads || [];
+    h += card(`伏筆｜未回收 ${threads.filter(x => x.status !== '已回收').length} 條`, threads.slice().reverse().map(x => `
+        <div class="nova-inf-item ${x.status === '已回收' ? 'nova-inf-done-soft' : 'nova-inf-clue-on'}">
+            <div>[${esc(x.form)}｜第 ${x.planted_turn} 回合｜${esc(x.status)}] ${esc(x.content)}</div>
+            <div class="nova-inf-sub">指向：${sealedVal(x.target)}${x.resolution ? `｜回收：${esc(x.resolution)}` : ''}</div>
+            <div class="nova-inf-row">${x.status !== '已回收' ? btn('thread_resolve', '標記已回收', `data-id="${esc(x.id)}"`) : ''}${delBtn('threads', x.id)}</div>
+        </div>`).join('') || '<p class="nova-inf-empty">還沒有伏筆</p>', btn('edit_threads', '編輯'));
     return h;
 }
 
@@ -1153,9 +1222,35 @@ function renderSealed() {
     h += card('男主與你的過往', inst.cast.map(c => `
         <div class="nova-inf-item"><b>${esc(c.codename)}</b> ＝ ${esc(c.real_name)}｜好感 ${esc(c.affinity)}｜${esc(c.obsession_stage)}
         <div class="nova-inf-sub">歷程：${esc(c.history_length)}｜關係：${esc(c.relation_type)}</div>
+        <div class="nova-inf-sub">影響成因：${esc(c.influence)}</div>
+        <div class="nova-inf-sub">專屬殘留物：${esc(c.remnant)}</div>
         <div class="nova-inf-sub">未竟之約：${esc(c.promise)}</div></div>`).join(''));
+    h += card('伏筆指向', (inst.threads || []).map(x => `<div class="nova-inf-item">[${esc(x.id)}｜${esc(x.status)}] ${esc(x.content)}<div class="nova-inf-sub">指向：${esc(x.target)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>');
     h += card('讓渡紀錄', inst.concessions.map((x, i) => `<div class="nova-inf-item">回合 ${x.turn}｜${esc(x.giver)}｜${esc(x.what)}｜${esc(x.form)}<div class="nova-inf-sub">代價：${esc(x.cost)}｜後續：${esc(x.consequence)}</div><div class="nova-inf-row">${delBtn('concessions', i)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_concessions', '編輯'));
     return h;
+}
+
+const PROFILE_TEMPLATE = `駕駛能力：
+乘坐偏好（暈車、暈船、暈機、刺激遊樂設施）：
+水性（會不會游泳、怕不怕深水）：
+飲食限制（過敏、不吃的東西、腸胃、吃辣程度、咖啡因）：
+酒精與藥物反應：
+體能技能（腳踏車、溜冰、滑雪、攀岩、露營、長途步行）：
+生存技能（生火、搭帳篷、辨方向、急救、使用工具）：
+動物接受度：
+環境適應（怕冷、怕熱、怕黑、怕高、密閉空間、怕髒、怕濕）：
+感官偏好（噪音、強光、異味、黏膩、濕衣服）：
+生活技能（做飯、縫補、整理、導航、看地圖、修東西）：
+清潔習慣：對清潔有明確要求，有一定程度的潔癖。外出一整天、流汗、沾到灰塵雨水血污海水煙味後，不能接受不清潔就上床睡覺。條件允許時會優先洗澡、洗頭、更衣、刷牙；條件不足時至少要熱水擦身、局部清洗、換乾淨衣物、整理床鋪後才休息。清潔關係到她的安全感與能否入睡，不可只安排別人洗漱而默認她可以不洗。
+其他習慣與禁忌：`;
+
+function renderProfile() {
+    const s = S();
+    return card('玩家檔案', `
+        <p class="nova-inf-hint">這裡寫的是「你本人」的能力、體質、習慣與禁忌，不管進哪個副本、拿到什麼身份卡都不會變。會在副本開局與進行中送給 AI。</p>
+        <p class="nova-inf-hint">沒寫的項目，AI 會一律以普通人處理，不會自動讓你很會、很能撐、很敢。不確定的項目留空就好。</p>
+        <textarea class="nova-inf-input" rows="22" data-set="playerProfile" placeholder="點下方按鈕插入填寫範本">${esc(s.playerProfile || '')}</textarea>
+        <div class="nova-inf-row">${s.playerProfile?.trim() ? '' : btn('profile_template', '插入填寫範本')}</div>`);
 }
 
 function renderRules() {
@@ -1309,6 +1404,15 @@ function onBodyClick(ev) {
             openEditor('地圖' + (peek ? '' : '（封存欄位已隱藏，儲存時會保留）'), stripKeys(inst.map.regions, keys), v => { inst.map.regions = mergeKeys(inst.map.regions, v, keys).map(normRegion); });
         } break;
         case 'edit_life': if (inst) openEditor('生活設施', inst.daily_life || [], v => { inst.daily_life = v.map(normLife); }); break;
+        case 'thread_resolve': {
+            const x = inst?.threads?.find(t => t.id === b.dataset.id);
+            if (x) { x.status = '已回收'; x.resolved_turn = inst.turn; commit(); }
+            break;
+        }
+        case 'edit_threads': if (inst) openEditor('伏筆' + (peek ? '' : '（指向欄位已隱藏，儲存時會保留）'), stripKeys(inst.threads || [], SEALED_THREAD_KEYS), v => {
+            inst.threads = mergeKeys(inst.threads || [], v, SEALED_THREAD_KEYS).map((t, i) => normThread(t, i, inst.turn));
+        }); break;
+        case 'profile_template': s.playerProfile = PROFILE_TEMPLATE; saveSettings(); updateInjection(); renderPanel(); break;
         case 'seed_clear': if (confirm('清空種子卡？')) { cs.seed = {}; commit(); } break;
         case 'identity_clear': if (inst && confirm('清空身份卡？')) { inst.identity_card = blankInstance().identity_card; commit(); } break;
         case 'del': {
@@ -1317,12 +1421,12 @@ function onBodyClick(ev) {
             const lists = {
                 cast: () => inst?.cast, people: () => inst?.people, factions: () => inst?.factions,
                 clues: () => inst?.clues, events: () => inst?.calendar?.events, glossary: () => inst?.glossary,
-                concessions: () => inst?.concessions, regions: () => inst?.map?.regions, life: () => inst?.daily_life,
+                concessions: () => inst?.concessions, threads: () => inst?.threads, regions: () => inst?.map?.regions, life: () => inst?.daily_life,
                 glossary_global: () => s.glossary_global, rewards: () => s.rewards,
             };
             const arr = lists[list]?.();
             if (!arr) break;
-            const byId = list === 'clues' || list === 'events';
+            const byId = list === 'clues' || list === 'events' || list === 'threads';
             const idx = byId ? arr.findIndex(x => x.id === key) : Number(key);
             if (idx < 0 || idx >= arr.length) break;
             if (!confirm('確定刪除這一筆？')) break;
