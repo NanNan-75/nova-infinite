@@ -228,3 +228,111 @@
 .nova-inf-here { border-left: 3px solid var(--SmartThemeQuoteColor, #8ab4f8); padding-left: 8px; }
 
 .nova-inf-done-soft { opacity: 0.5; border-left: 3px solid rgba(255, 255, 255, 0.15); padding-left: 8px; }
+
+/* ───── v0.6 介面：按鈕層級 ───── */
+.nova-inf-btn { padding: 5px 11px; font-size: 0.86em; transition: background 0.15s, border-color 0.15s; }
+.nova-inf-btn.nova-inf-primary {
+    background: var(--SmartThemeQuoteColor, #8ab4f8);
+    border-color: transparent;
+    color: #111;
+    font-weight: 600;
+}
+.nova-inf-btn.nova-inf-primary:hover { filter: brightness(1.08); background: var(--SmartThemeQuoteColor, #8ab4f8); }
+.nova-inf-btn.nova-inf-danger {
+    border-color: rgba(229, 115, 115, 0.7);
+    color: #ef8a8a;
+}
+.nova-inf-btn.nova-inf-danger:hover { background: rgba(229, 115, 115, 0.15); color: #ffb0b0; }
+
+/* ───── 分頁 ───── */
+.nova-inf-tab.dim { opacity: 0.35; }
+.nova-inf-tab.dim.active { opacity: 1; }
+
+/* ───── 流程步驟 ───── */
+.nova-inf-steps {
+    display: flex;
+    align-items: center;
+    margin: 2px 0 12px;
+}
+.nova-inf-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    opacity: 0.45;
+}
+.nova-inf-step.done, .nova-inf-step.now { opacity: 1; }
+.nova-inf-step-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8em;
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+}
+.nova-inf-step.done .nova-inf-step-dot { border-color: var(--SmartThemeQuoteColor, #8ab4f8); color: var(--SmartThemeQuoteColor, #8ab4f8); }
+.nova-inf-step.now .nova-inf-step-dot { background: var(--SmartThemeQuoteColor, #8ab4f8); color: #111; border-color: transparent; font-weight: 700; }
+.nova-inf-step-name { font-size: 0.75em; white-space: nowrap; }
+.nova-inf-step.now .nova-inf-step-name { font-weight: 700; }
+.nova-inf-step-line { flex: 1; height: 1px; background: var(--SmartThemeBorderColor, #555); margin: 0 4px 18px; min-width: 8px; }
+
+/* ───── 引導卡 ───── */
+.nova-inf-guide {
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(138, 180, 248, 0.08);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 9%, transparent);
+    border: 1px solid rgba(138, 180, 248, 0.35);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 40%, transparent);
+}
+.nova-inf-guide-title { font-weight: 700; margin-bottom: 4px; }
+.nova-inf-guide ol { margin: 4px 0 2px; padding-left: 20px; }
+.nova-inf-guide li { margin: 3px 0; font-size: 0.92em; }
+
+.nova-inf-welcome {
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, rgba(138, 180, 248, 0.18), rgba(255, 255, 255, 0.04));
+    background: linear-gradient(135deg, color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 20%, transparent), rgba(255, 255, 255, 0.03));
+    border: 1px solid rgba(138, 180, 248, 0.45);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 50%, transparent);
+}
+.nova-inf-welcome p { margin: 4px 0 6px; font-size: 0.9em; opacity: 0.85; }
+
+/* ───── 數據列 ───── */
+.nova-inf-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin: 8px 0;
+}
+.nova-inf-stats > div {
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 6px 8px;
+    min-width: 0;
+}
+.nova-inf-stats span { display: block; font-size: 0.75em; opacity: 0.6; }
+.nova-inf-stats b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ───── 可展開區塊 ───── */
+.nova-inf-more > summary { cursor: pointer; padding: 2px 0; font-size: 0.9em; opacity: 0.85; }
+details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
+
+/* ───── 危險區 ───── */
+.nova-inf-danger-zone {
+    border: 1px dashed rgba(229, 115, 115, 0.55);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 14px 0 10px;
+}
+.nova-inf-danger-zone > b { color: #ef8a8a; font-size: 0.9em; }
+
+/* ───── 說明 ───── */
+.nova-inf-ol { padding-left: 20px; margin: 4px 0; }
+.nova-inf-ol li { margin: 4px 0; font-size: 0.92em; }

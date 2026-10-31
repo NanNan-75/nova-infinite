@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.5.1
+// Nova 無限流面板 v0.6.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -881,19 +881,22 @@ function commit() {
 // ───────────────────────── UI ─────────────────────────
 
 const TABS = [
-    ['overview', '總覽'],
-    ['people', '人物'],
-    ['clues', '線索'],
-    ['calendar', '日曆'],
-    ['bag', '背包'],
-    ['world', '地圖'],
-    ['glossary', '辭典'],
-    ['worlds', '世界線'],
-    ['sealed', '封存'],
-    ['profile', '玩家檔案'],
-    ['rules', '規則'],
-    ['settings', '設定'],
+    ['overview', '🧭 總覽'],
+    ['people', '👤 人物'],
+    ['clues', '🔍 線索'],
+    ['world', '🗺 地圖'],
+    ['calendar', '📅 日曆'],
+    ['bag', '🎒 背包'],
+    ['glossary', '📖 辭典'],
+    ['worlds', '✨ 世界線'],
+    ['sealed', '🔒 封存'],
+    ['profile', '🙋 玩家檔案'],
+    ['rules', '📜 規則'],
+    ['settings', '⚙ 設定'],
+    ['help', '❓ 說明'],
 ];
+// 沒有副本時，這些分頁會變淡
+const INSTANCE_TABS = ['people', 'clues', 'world', 'calendar'];
 
 function ensurePanel() {
     if (document.getElementById('nova_inf_panel')) return;
@@ -904,12 +907,14 @@ function ensurePanel() {
         <div class="nova-inf-header">
             <span class="nova-inf-title">∞ 無限流面板</span>
             <span class="nova-inf-mode" id="nova_inf_mode_badge"></span>
+            <button class="nova-inf-x" id="nova_inf_help" title="使用說明">？</button>
             <button class="nova-inf-x" id="nova_inf_close" title="關閉">✕</button>
         </div>
         <div class="nova-inf-tabs" id="nova_inf_tabs"></div>
         <div class="nova-inf-body" id="nova_inf_body"></div>`;
     document.body.appendChild(panel);
     document.getElementById('nova_inf_close').addEventListener('click', togglePanel);
+    document.getElementById('nova_inf_help').addEventListener('click', () => { currentTab = 'help'; renderPanel(); });
     const tabs = document.getElementById('nova_inf_tabs');
     TABS.forEach(([id, label]) => {
         const b = document.createElement('button');
@@ -937,13 +942,13 @@ function card(title, body, actions = '') {
     return `<div class="nova-inf-card"><div class="nova-inf-card-head"><b>${title}</b><span>${actions}</span></div>${body}</div>`;
 }
 
-function btn(action, label, extra = '') {
-    return `<button class="nova-inf-btn" data-act="${action}" ${extra}>${label}</button>`;
+function btn(action, label, extra = '', variant = '') {
+    return `<button class="nova-inf-btn ${variant ? 'nova-inf-' + variant : ''}" data-act="${action}" ${extra}>${label}</button>`;
 }
 
 // 單筆刪除按鈕：list 為資料清單名稱，key 為索引或 id
-function delBtn(list, key, label = '刪除') {
-    return `<button class="nova-inf-btn nova-inf-del" data-act="del" data-list="${list}" data-key="${esc(key)}">${label}</button>`;
+function delBtn(list, key, label = '🗑 刪除') {
+    return `<button class="nova-inf-btn nova-inf-danger" data-act="del" data-list="${list}" data-key="${esc(key)}">${label}</button>`;
 }
 
 function renderPanel() {
@@ -951,16 +956,50 @@ function renderPanel() {
     if (!panel || panel.classList.contains('nova-inf-hidden')) return;
     const cs = C();
     const body = document.getElementById('nova_inf_body');
-    document.querySelectorAll('.nova-inf-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === currentTab));
+    document.querySelectorAll('.nova-inf-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === currentTab);
+        b.classList.toggle('dim', INSTANCE_TABS.includes(b.dataset.tab) && !cs?.instance);
+    });
     const badge = document.getElementById('nova_inf_mode_badge');
     if (!cs) { body.innerHTML = '<p class="nova-inf-empty">請先開啟一個聊天。</p>'; badge.textContent = ''; return; }
     badge.textContent = MODES[cs.mode] + (cs.lock ? '｜獨處鎖' : '');
     const renderers = {
         overview: renderOverview, people: renderPeople, clues: renderClues, calendar: renderCalendar,
         bag: renderBag, world: renderWorldMap, glossary: renderGlossary, worlds: renderWorlds, sealed: renderSealed,
-        profile: renderProfile, rules: renderRules, settings: renderSettingsTab,
+        profile: renderProfile, rules: renderRules, settings: renderSettingsTab, help: renderHelp,
     };
     body.innerHTML = renderers[currentTab]();
+}
+
+function noInstance() {
+    return `<div class="nova-inf-guide"><div class="nova-inf-guide-title">目前沒有進行中的副本</div>
+        <p class="nova-inf-sub">副本開局後，這裡會自動出現資料。</p>
+        <div class="nova-inf-row">${btn('goto_overview', '回到總覽')}</div></div>`;
+}
+
+// ── 流程引導 ──
+const FLOW = [
+    ['lobby', '白域大廳'],
+    ['opening', '副本開局'],
+    ['instance', '副本進行中'],
+    ['settle', '結算'],
+];
+
+function stepper(mode) {
+    const idx = FLOW.findIndex(f => f[0] === mode);
+    return `<div class="nova-inf-steps">${FLOW.map((f, i) => `
+        <div class="nova-inf-step ${i < idx ? 'done' : ''} ${i === idx ? 'now' : ''}">
+            <span class="nova-inf-step-dot">${i < idx ? '✓' : i + 1}</span>
+            <span class="nova-inf-step-name">${f[1]}</span>
+        </div>`).join('<span class="nova-inf-step-line"></span>')}</div>`;
+}
+
+function guide(title, lines, actions = '') {
+    return `<div class="nova-inf-guide">
+        <div class="nova-inf-guide-title">${title}</div>
+        <ol>${lines.map(l => `<li>${l}</li>`).join('')}</ol>
+        ${actions ? `<div class="nova-inf-row">${actions}</div>` : ''}
+    </div>`;
 }
 
 function renderOverview() {
@@ -968,87 +1007,165 @@ function renderOverview() {
     const s = S();
     const inst = cs.instance;
     let h = '';
-    h += card('模式', `
-        <select class="nova-inf-input" data-bind="mode">
-            ${Object.entries(MODES).map(([k, v]) => `<option value="${k}" ${cs.mode === k ? 'selected' : ''}>${v}</option>`).join('')}
-        </select>
-        <p class="nova-inf-hint">一個副本請開一個新聊天。白域大廳：選副本、商城；副本開局：填好種子卡後送出第一則訊息；AI 回傳開局資料後會自動切到「副本進行中」。</p>`);
 
+    if (!s.seenGuide) {
+        h += `<div class="nova-inf-welcome">
+            <b>第一次使用嗎？</b>
+            <p>這個面板會幫 AI 記住副本狀態、把真相藏起來，並在每回合自動更新。先花一分鐘看一下流程吧。</p>
+            <div class="nova-inf-row">${btn('goto_help', '看使用說明', '', 'primary')}${btn('guide_dismiss', '我知道了')}</div>
+        </div>`;
+    }
+
+    if (cs.mode === 'off') {
+        h += guide('這個聊天還沒有啟用無限流', [
+            '想從頭開始：按「進入白域大廳」，和無語聊天、選副本。',
+            '已經在白域選好副本：開一個<b>新聊天</b>，插件會自動進入副本開局。',
+            '想直接開局、自己填種子卡：按「直接開始副本開局」。',
+        ], btn('to_lobby', '進入白域大廳', '', 'primary') + btn('to_opening', '直接開始副本開局'));
+    } else {
+        h += stepper(cs.mode);
+    }
+
+    // ── 白域大廳 ──
     if (cs.mode === 'lobby') {
-        h += card('白域大廳', `
-            <p>碎片：<b>${s.inventory.shards || 0}</b>｜已通關：<b>${s.ledger.length}</b></p>
-            ${btn('to_opening', '在這個聊天開始副本開局')}`);
+        if (s.pendingSeed) {
+            h += guide(`已選定「${esc(s.pendingSeed.name)}」`, [
+                '開一個<b>新的聊天</b>（同一張角色卡）。',
+                '插件會自動切到「副本開局」，種子卡也會填好。',
+                '在新聊天送出第一則訊息，副本就開始了。',
+            ], btn('pending_here', '改成直接在這個聊天開局') + btn('pending_cancel', '取消選擇', '', 'danger'));
+        } else {
+            h += guide('現在要做什麼', [
+                '跟無語聊天，請牠列出副本選項。',
+                cs.options?.length ? '選一個副本：在劇情裡告訴無語，或按下方卡片的「選這個」。' : '無語列出選項後，下方會出現副本卡片。',
+                '選定後開一個新聊天，插件會自動開局。',
+            ]);
+        }
+        h += card('白域狀態', `<p>碎片 <b>${s.inventory.shards || 0}</b>　已通關 <b>${s.ledger.length}</b></p>`);
         if (cs.options?.length) {
             h += card('副本選項', cs.options.map((o, i) => `
                 <div class="nova-inf-item">
                     <div><b>${i + 1}. ${esc(o.name)}</b>｜${esc(o.difficulty)} 級｜${esc(o.line_type)}</div>
                     ${o.hook ? `<div class="nova-inf-sub">「${esc(o.hook)}」${o.hook_type ? `［${esc(o.hook_type)}］` : ''}</div>` : ''}
                     <div class="nova-inf-sub">${esc(o.type)}／${esc(o.world_type)}／${o.mechanic ? (peek ? esc(o.mechanic) : '？？？') : '無機制'}｜${esc(o.duration)}｜獎勵 ${esc(o.reward)}</div>
-                    <div class="nova-inf-row">${btn('pick', '選這個', `data-i="${i}"`)}</div>
-                </div>`).join(''), btn('options_clear', '清除選項'));
+                    <div class="nova-inf-row">${btn('pick', '選這個', `data-i="${i}"`, 'primary')}</div>
+                </div>`).join(''), btn('options_clear', '清除選項', '', 'danger'));
         }
     }
-    if (s.pendingSeed) {
-        h += card('已選定的副本', `
-            <p><b>${esc(s.pendingSeed.name)}</b>｜${esc(s.pendingSeed.difficulty)} 級</p>
-            <p class="nova-inf-hint">開一個新聊天，插件會自動切到「副本開局」並填好種子卡。</p>
-            <div class="nova-inf-row">${btn('pending_here', '直接在這個聊天開局')}${btn('pending_cancel', '取消選擇')}</div>`);
-    }
 
-    if (cs.mode === 'opening' || cs.mode === 'lobby') {
+    // ── 副本開局 ──
+    if (cs.mode === 'opening') {
+        h += guide('現在要做什麼', [
+            '看一下下方種子卡，想補充的就填（全部空白也可以，AI 會自己生成）。',
+            '回到聊天，<b>送出第一則訊息</b>（例如「開始」，或你想做的第一個動作）。',
+            'AI 回覆後，面板會自動切到「副本進行中」，人物、線索、地圖都會出現。',
+        ]);
         const sd = cs.seed || {};
         const f = (k, label, ph = '') => `<label class="nova-inf-label">${label}<textarea class="nova-inf-input" rows="2" data-seed="${k}" placeholder="${ph}">${esc(sd[k] || '')}</textarea></label>`;
         h += card('副本種子卡', `
+            <p class="nova-inf-hint">空白的欄位都交給 AI。謎底一律由 AI 生成並封存，你不會在這裡看到。</p>
             ${f('name', '副本名稱')}
-            ${f('world', '核心梗（一句話）', '空白＝交給 AI')}
-            ${f('hook_type', '梗型（空白＝交給 AI）', '身分錯置、規則荒誕、倒數、委託、經營、競賽、旅程、封閉、調查、交換、日常異常、守護、逃離……')}
-            ${f('type', '副本類型（空白＝交給 AI）')}
-            ${f('world_type', '世界線類型（空白＝交給 AI）')}
+            ${f('world', '核心梗（一句話）')}
+            ${f('hook_type', '梗型', '身分錯置、規則荒誕、倒數、委託、經營、競賽、旅程、封閉、調查、交換、日常異常、守護、逃離……')}
             ${sd.mechanic ? `<p class="nova-inf-sub">特殊機制：${peek ? esc(sd.mechanic) : '？？？（已封存）'}</p>` : ''}
-            ${f('mood', '想要的氛圍', '例：華麗但壓抑、慢熱')}
-            ${f('scenes', '想要的名場面（選填）', '例：一場必須戴面具參加的舞會')}
-            ${f('avoid', '不想要的東西', '例：大量戰鬥')}
-            ${f('cast', '卡司（空白＝交給 AI）')}
-            ${f('difficulty', '難度（空白＝交給 AI）')}
-            ${f('line_type', '主線／支線')}
-            ${f('from_worldline', '升級自世界線座標（選填）')}
-            <p class="nova-inf-hint">謎底層一律交給 AI 生成並封存，你不會在這裡看到。</p>`,
-            btn('seed_clear', '清空種子卡'));
+            <details class="nova-inf-more"><summary>更多欄位（氛圍、名場面、難度……）</summary>
+                ${f('mood', '想要的氛圍', '例：華麗但壓抑、慢熱')}
+                ${f('scenes', '想要的名場面', '例：一場必須戴面具參加的舞會')}
+                ${f('avoid', '不想要的東西', '例：大量戰鬥')}
+                ${f('type', '副本類型')}
+                ${f('world_type', '世界線類型')}
+                ${f('difficulty', '難度')}
+                ${f('line_type', '主線／支線')}
+                ${f('cast', '指定卡司')}
+                ${f('from_worldline', '升級自世界線座標')}
+            </details>`,
+            btn('seed_clear', '清空', '', 'danger'));
     }
 
-    if (inst) {
+    // ── 副本進行中 ──
+    if (inst && cs.mode === 'instance') {
         const cal = inst.calendar || {};
         const remain = inst.time_limit_days ? inst.time_limit_days - (cal.day || 1) : null;
         h += card(esc(inst.name || '未命名副本'), `
             ${inst.hook ? `<p class="nova-inf-sub">「${esc(inst.hook)}」${inst.hook_type ? `［${esc(inst.hook_type)}］` : ''}</p>` : ''}
-            <p>${esc(inst.line_type)}｜${esc(inst.difficulty)} 級｜${esc(inst.worldline)}｜狀態：${esc(inst.status)}</p>
-            <p>${esc(inst.axes.type)}／${esc(inst.axes.world)}／${inst.axes.mechanic ? (inst.mechanic_revealed || peek ? esc(inst.axes.mechanic) : '？？？') : '無機制'}</p>
-            <p>第 <b>${inst.current_act}</b> 幕／共 ${inst.total_acts} 幕</p>
+            <p class="nova-inf-sub">${esc(inst.line_type)}｜${esc(inst.difficulty)} 級｜${esc(inst.axes.type)}／${esc(inst.axes.world)}／${inst.axes.mechanic ? (inst.mechanic_revealed || peek ? esc(inst.axes.mechanic) : '？？？') : '無機制'}</p>
+            <div class="nova-inf-stats">
+                <div><span>幕</span><b>${inst.current_act}/${inst.total_acts}</b></div>
+                <div><span>天數</span><b>${cal.day || 1}${inst.time_limit_days ? `/${inst.time_limit_days}` : ''}</b></div>
+                <div><span>位置</span><b>${esc(inst.location || '—')}</b></div>
+            </div>
             <div class="nova-inf-bar"><div style="width:${inst.act_progress}%"></div></div>
-            <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%</p>
-            <p>${esc(cal.calendar_name)} ${esc(cal.date_label)} ${esc(cal.time_label)}｜第 ${cal.day || 1} 天${remain !== null ? `｜剩餘 ${remain} 天${remain < 0 ? '（已超時）' : ''}` : ''}</p>
+            <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${remain !== null && remain < 0 ? '｜<span class="nova-inf-warn">已超時</span>' : ''}</p>
             <p>本幕問題：${esc(inst.acts.find(a => a.number === inst.current_act)?.question || '—')}</p>`,
             btn('edit_basic', '編輯'));
-        h += card('快捷操作', `
+        h += card('獨處鎖', `
+            <p class="nova-inf-hint">和某位男主單獨相處、正在兌現條件時打開，這段期間不會有人闖進來打斷。場景結束記得關掉。</p>
+            ${btn('lock', cs.lock ? '🔓 關閉獨處鎖（目前開啟中）' : '🔒 開啟獨處鎖', cs.lock ? 'data-on="1"' : '', cs.lock ? '' : 'primary')}`);
+        h += `<details class="nova-inf-card nova-inf-more"><summary><b>手動調整</b><span class="nova-inf-sub">　AI 漏回報時才需要</span></summary>
             <div class="nova-inf-row">
-                ${btn('lock', cs.lock ? '🔓 關閉獨處鎖' : '🔒 開啟獨處鎖', cs.lock ? 'data-on="1"' : '')}
                 ${btn('day_plus', '日期 +1')}
                 ${btn('prog_plus', '進度 +5%')}
                 ${btn('act_next', '進入下一幕')}
                 ${btn('end_manual', '手動結束副本')}
-            </div>
-            <div class="nova-inf-row">${btn('inst_delete', '刪除這個副本（不寫入帳本）')}</div>`);
+            </div></details>`;
+        h += `<div class="nova-inf-danger-zone">
+            <b>危險操作</b>
+            <div class="nova-inf-row">${btn('inst_delete', '🗑 刪除這個副本（不寫入帳本）', '', 'danger')}</div>
+        </div>`;
     }
 
+    // ── 結算 ──
     if (cs.mode === 'settle') {
-        h += card('結算', `<p>副本已結束並寫入帳本。結算劇情跑完後，可切回白域大廳。</p><div class="nova-inf-row">${btn('to_lobby', '回到白域大廳')}${btn('new_instance', '在這個聊天開新副本')}</div>`);
+        h += guide('副本結束了', [
+            '讓劇情跑完結算場景（無語會統計獎勵）。',
+            '想許現實願望的話，到「背包」分頁按「＋ 許願」記下來。',
+            '準備好了就回到白域大廳，選下一個副本。',
+        ], btn('to_lobby', '回到白域大廳', '', 'primary') + btn('new_instance', '在這個聊天開新副本'));
+        if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>`);
     }
     return h;
 }
 
+function renderHelp() {
+    const sec = (t, body) => `<div class="nova-inf-card"><div class="nova-inf-card-head"><b>${t}</b></div>${body}</div>`;
+    return sec('基本流程', `
+        <ol class="nova-inf-ol">
+            <li><b>白域大廳</b>：開一個聊天，在「總覽」按「進入白域大廳」。跟無語聊天，牠會列出副本選項。</li>
+            <li><b>選副本</b>：在劇情裡告訴無語你選哪個，或按副本卡片上的「選這個」。</li>
+            <li><b>開新聊天</b>：一個副本一個聊天。開新聊天後，插件會自動進入「副本開局」。</li>
+            <li><b>送出第一則訊息</b>：AI 會生成副本並在背後回報資料，面板自動切到「副本進行中」。</li>
+            <li><b>正常玩</b>：每次 AI 回覆，右上角會跳出提示，告訴你哪裡更新了。</li>
+            <li><b>結算</b>：副本結束時自動寫進帳本，回到白域大廳選下一個。</li>
+        </ol>`) +
+    sec('每個分頁做什麼', `
+        <ul class="nova-inf-ol">
+            <li><b>總覽</b>：目前在哪一步、下一步要做什麼、副本進度、獨處鎖</li>
+            <li><b>人物</b>：男主（代號）、副本裡的人、勢力、你的身份卡，可以寫自己的筆記</li>
+            <li><b>線索</b>：依幕分組的線索與伏筆，未出現的會上鎖</li>
+            <li><b>地圖</b>：地區、目前位置、這個世界的生活設施</li>
+            <li><b>日曆</b>：副本第幾天、剩幾天、已知行程</li>
+            <li><b>背包</b>：碎片、道具、現實願望</li>
+            <li><b>辭典</b>：副本的專有名詞，記不住名字時來這裡查</li>
+            <li><b>世界線</b>：通關帳本、世界線紀錄、清除資料</li>
+            <li><b>封存</b>：真相、真名、好感，要按確認才會解鎖</li>
+            <li><b>玩家檔案</b>：你本人的能力、體質、習慣，所有副本共用</li>
+            <li><b>規則</b>：送給 AI 的規則，可以新增、修改、排序</li>
+            <li><b>設定</b>：注入位置、禁用素材、備份、預覽、手動切換模式</li>
+        </ul>`) +
+    sec('按鈕顏色', `
+        <div class="nova-inf-row">${btn('noop', '主要動作', '', 'primary')}${btn('noop', '一般動作')}${btn('noop', '🗑 刪除', '', 'danger')}</div>
+        <p class="nova-inf-hint">藍色是建議你按的下一步；紅色會刪除資料，按下去都會先問你確認。</p>`) +
+    sec('常見問題', `
+        <p><b>AI 回覆裡出現一串 JSON 沒有消失？</b><br>重新整理頁面通常就會消失。如果每次都出現，到「規則」確認〈插件狀態回報格式〉有勾選。</p>
+        <p><b>面板都沒有更新？</b><br>AI 可能忘了回報。可以在「總覽」的「手動調整」補，或在對應分頁按「編輯」。</p>
+        <p><b>重新生成或刪掉訊息會怎樣？</b><br>面板會自動退回那則訊息之前的狀態。</p>
+        <p><b>舊副本的東西跑到新副本裡？</b><br>確認新副本是在新聊天開的。同一個聊天裡，舊劇情還在上下文，AI 看得到。</p>
+        <p><b>跳出黃色警告「出現禁用素材」？</b><br>AI 用了你不想要的元素，或在身分揭露前寫出真名。可以重新生成那則回覆。</p>`);
+}
+
 function renderPeople() {
     const inst = C().instance;
-    if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
+    if (!inst) return noInstance();
     let h = '';
     h += card('卡司', inst.cast.map((c, i) => `
         <div class="nova-inf-item">
@@ -1078,13 +1195,13 @@ function renderPeople() {
         <p class="nova-inf-sub">${esc(ic.family)}｜限制：${esc(ic.restrictions)}｜範圍：${esc(ic.range)}</p>
         <p class="nova-inf-sub">摩擦：${esc(ic.friction)}</p>
         <p class="nova-inf-sub">${Object.entries(ic.snapshot || {}).filter(([, v]) => v).map(([k, v]) => `${esc(k)}：${esc(v)}`).join('｜')}</p>`,
-        btn('edit_identity', '編輯') + btn('identity_clear', '清空'));
+        btn('edit_identity', '編輯') + btn('identity_clear', '清空', '', 'danger'));
     return h;
 }
 
 function renderClues() {
     const inst = C().instance;
-    if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
+    if (!inst) return noInstance();
     let h = '';
     for (let n = 1; n <= inst.total_acts; n++) {
         const act = inst.acts.find(a => a.number === n);
@@ -1119,7 +1236,7 @@ function renderClues() {
 
 function renderCalendar() {
     const inst = C().instance;
-    if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
+    if (!inst) return noInstance();
     const cal = inst.calendar || {};
     const events = cal.events || [];
     const visible = events.filter(e => !e.sealed || e.fired || peek);
@@ -1140,7 +1257,7 @@ function renderBag() {
     const inv = s.inventory;
     return card('背包', `
         <p>碎片：<b>${inv.shards || 0}</b></p>
-        ${inv.items.map((it, i) => `<div class="nova-inf-item"><b>${esc(it.name)}</b> ×${it.quantity || 1}｜${esc(it.carry_rule)}｜來源：${esc(it.source)}<div class="nova-inf-sub">${esc(it.description)}</div>${btn('item_del', '丟棄', `data-i="${i}"`)}</div>`).join('') || '<p class="nova-inf-empty">空空的</p>'}`,
+        ${inv.items.map((it, i) => `<div class="nova-inf-item"><b>${esc(it.name)}</b> ×${it.quantity || 1}｜${esc(it.carry_rule)}｜來源：${esc(it.source)}<div class="nova-inf-sub">${esc(it.description)}</div>${btn('item_del', '🗑 丟棄', `data-i="${i}"`, 'danger')}</div>`).join('') || '<p class="nova-inf-empty">空空的</p>'}`,
         btn('item_add', '＋ 新增') + btn('edit_bag', '編輯')) +
         card('現實獎勵', `
         ${s.rewards.map((r, i) => `<div class="nova-inf-item">${esc(r.instance_name || '')}｜${esc(r.reward_tier || '')}｜願望：${esc(r.wish)}｜${r.redeemed ? '已兌現' : '未兌現'}
@@ -1150,7 +1267,7 @@ function renderBag() {
 
 function renderWorldMap() {
     const inst = C().instance;
-    if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
+    if (!inst) return noInstance();
     const era = inst.era || {};
     const regions = inst.map?.regions || [];
     const life = inst.daily_life || [];
@@ -1178,9 +1295,9 @@ function renderGlossary() {
     const inst = C().instance;
     const item = (g, list, i) => `<div class="nova-inf-item"><b>${esc(g.term)}</b>：${esc(g.desc)}<div class="nova-inf-row">${delBtn(list, i)}</div></div>`;
     return card('副本辭典', (inst?.glossary || []).map((g, i) => item(g, 'glossary', i)).join('') || '<p class="nova-inf-empty">無</p>',
-        inst ? btn('glossary_add', '＋ 新增') + btn('glossary_clear', '清空') + btn('edit_glossary', '編輯') : '') +
+        inst ? btn('glossary_add', '＋ 新增') + btn('glossary_clear', '清空', '', 'danger') + btn('edit_glossary', '編輯') : '') +
         card('白域通用詞彙', s.glossary_global.map((g, i) => item(g, 'glossary_global', i)).join('') || '<p class="nova-inf-empty">無</p>',
-        btn('glossary_global_add', '＋ 新增') + btn('glossary_global_clear', '清空') + btn('edit_glossary_global', '編輯')) +
+        btn('glossary_global_add', '＋ 新增') + btn('glossary_global_clear', '清空', '', 'danger') + btn('edit_glossary_global', '編輯')) +
         '<p class="nova-inf-hint">副本辭典只屬於這個聊天的副本，開新副本時會一起清掉；白域通用詞彙則跨副本保留，只在白域大廳送給 AI。</p>';
 }
 
@@ -1190,21 +1307,21 @@ function renderWorlds() {
         <div class="nova-inf-item">#${l.no}｜<b>${esc(l.name)}</b>｜${esc(l.worldline)}｜${esc(l.line_type)}｜${esc(l.difficulty)}｜${esc(l.result)}
         ${l.hook ? `<div class="nova-inf-sub">「${esc(l.hook)}」${l.hook_type ? `［${esc(l.hook_type)}］` : ''}</div>` : ''}
         <div class="nova-inf-sub">${esc(l.axes?.type)}／${esc(l.axes?.world)}／${esc(l.axes?.mechanic || '無')}｜${esc(l.exit_type)}｜${esc(l.date)}</div>
-        <div class="nova-inf-row">${btn('ledger_del', '刪除這筆', `data-i="${i}"`)}</div></div>`).join('');
+        <div class="nova-inf-row">${btn('ledger_del', '🗑 刪除這筆', `data-i="${i}"`, 'danger')}</div></div>`).join('');
     const wlHtml = s.worldlines.map((w, i) => `
         <div class="nova-inf-item"><b>${esc(w.coordinate)}</b>｜${esc(w.record_wall_text)}${w.anomaly ? '｜<span class="nova-inf-warn">異常</span>' : ''}
         <div class="nova-inf-sub">升級：${sealedVal(w.upgrade_status)}｜條件：${sealedVal(w.open_condition)}</div>
-        <div class="nova-inf-row">${btn('wl_del', '刪除這條世界線', `data-i="${i}"`)}</div></div>`).join('');
+        <div class="nova-inf-row">${btn('wl_del', '🗑 刪除這條世界線', `data-i="${i}"`, 'danger')}</div></div>`).join('');
     return card('通關帳本', ledgerHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_ledger', '編輯')) +
         card('世界線紀錄牆', wlHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_worldlines', '編輯')) +
-        card('清除資料', `
+        `<div class="nova-inf-danger-zone"><b>清除資料</b>
         <p class="nova-inf-hint">測試用。刪掉的資料無法復原，建議先到「設定」匯出備份。</p>
         <div class="nova-inf-row">
-            ${btn('reset_chat', '清除這個聊天的副本')}
-            ${btn('reset_ledger', '清空帳本與世界線')}
-            ${btn('reset_all', '清空全部遊玩資料')}
+            ${btn('reset_chat', '清除這個聊天的副本', '', 'danger')}
+            ${btn('reset_ledger', '清空帳本與世界線', '', 'danger')}
+            ${btn('reset_all', '清空全部遊玩資料', '', 'danger')}
         </div>
-        <p class="nova-inf-hint">「清空全部遊玩資料」會清掉帳本、世界線、背包、碎片、現實獎勵、白域詞彙，但保留規則與設定。</p>`);
+        <p class="nova-inf-hint">「清空全部遊玩資料」會清掉帳本、世界線、背包、碎片、現實獎勵、白域詞彙，但保留規則與設定。</p></div>`;
 }
 
 function renderSealed() {
@@ -1212,7 +1329,7 @@ function renderSealed() {
         return card('封存區', `
             <p>這裡是 AI 用來推進劇情的真相、真名、好感與過往。</p>
             <p class="nova-inf-hint">解鎖後，其他分頁的 🔒 也會一起顯示，直到你切換聊天或重新上鎖。</p>
-            ${btn('peek_on', '我確定要偷看')}`);
+            ${btn('peek_on', '我確定要偷看', '', 'primary')}`);
     }
     const inst = C().instance;
     let h = card('封存區（已解鎖）', btn('peek_off', '重新上鎖'));
@@ -1250,14 +1367,14 @@ function renderProfile() {
         <p class="nova-inf-hint">這裡寫的是「你本人」的能力、體質、習慣與禁忌，不管進哪個副本、拿到什麼身份卡都不會變。會在副本開局與進行中送給 AI。</p>
         <p class="nova-inf-hint">沒寫的項目，AI 會一律以普通人處理，不會自動讓你很會、很能撐、很敢。不確定的項目留空就好。</p>
         <textarea class="nova-inf-input" rows="22" data-set="playerProfile" placeholder="點下方按鈕插入填寫範本">${esc(s.playerProfile || '')}</textarea>
-        <div class="nova-inf-row">${s.playerProfile?.trim() ? '' : btn('profile_template', '插入填寫範本')}</div>`);
+        <div class="nova-inf-row">${s.playerProfile?.trim() ? '' : btn('profile_template', '插入填寫範本', '', 'primary')}</div>`);
 }
 
 function renderRules() {
     const s = S();
     const missing = DEFAULT_RULES.filter(d => !s.rules.find(r => r.id === d.id)).length;
     return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI，順序就是送出的順序。標題與內容可以直接修改，點到別處就會自動儲存。</p>
-        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則')}</div>` +
+        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則', '', 'primary')}</div>` +
         s.rules.map((r, i) => `
         <details class="nova-inf-card" ${openRuleId === r.id ? 'open' : ''} data-rule-id="${esc(r.id)}">
             <summary><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
@@ -1271,18 +1388,24 @@ function renderRules() {
                 ${btn('rule_up', '↑ 上移', `data-i="${i}"`)}
                 ${btn('rule_down', '↓ 下移', `data-i="${i}"`)}
                 ${btn('rule_dup', '複製一份', `data-i="${i}"`)}
-                ${btn('rule_del', '刪除', `data-i="${i}"`)}
+                ${btn('rule_del', '🗑 刪除', `data-i="${i}"`, 'danger')}
             </div>
         </details>`).join('') +
         `<div class="nova-inf-row">
             ${missing ? btn('rules_restore_missing', `補回被刪掉的預設規則（${missing} 條）`) : ''}
-            ${btn('rules_reset', '全部還原為預設（會刪掉自訂規則與修改）')}
+            ${btn('rules_reset', '全部還原為預設（會刪掉自訂規則與修改）', '', 'danger')}
         </div>`;
 }
 
 function renderSettingsTab() {
     const s = S();
-    return card('插件設定', `
+    const cs = C();
+    return card('手動切換模式', `
+        <p class="nova-inf-hint">一般不需要動這裡，插件會依流程自動切換。只有流程卡住時才手動調整。</p>
+        <select class="nova-inf-input" data-bind="mode">
+            ${Object.entries(MODES).map(([k, v]) => `<option value="${k}" ${cs?.mode === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select>`) +
+        card('插件設定', `
         <label class="nova-inf-label"><input type="checkbox" data-set="enabled" ${s.enabled ? 'checked' : ''}> 啟用插件</label>
         <label class="nova-inf-label">規則放置位置
             <select class="nova-inf-input" data-set="rulesDepthMode">
@@ -1366,6 +1489,10 @@ function onBodyClick(ev) {
 
     switch (act) {
         case 'to_opening': cs.mode = 'opening'; commit(); break;
+        case 'goto_help': currentTab = 'help'; s.seenGuide = true; saveSettings(); renderPanel(); break;
+        case 'goto_overview': currentTab = 'overview'; renderPanel(); break;
+        case 'guide_dismiss': s.seenGuide = true; saveSettings(); renderPanel(); break;
+        case 'noop': break;
         case 'pick': { const r = pickOption(Number(b.dataset.i)); if (r) toast(r, 'success'); renderPanel(); break; }
         case 'options_clear': cs.options = []; commit(); break;
         case 'pending_cancel': s.pendingSeed = null; saveSettings(); renderPanel(); break;
