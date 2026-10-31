@@ -336,3 +336,66 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 /* ───── 說明 ───── */
 .nova-inf-ol { padding-left: 20px; margin: 4px 0; }
 .nova-inf-ol li { margin: 4px 0; font-size: 0.92em; }
+
+/* ───── v0.7 通訊器 ───── */
+.nova-phone-contact {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 4px;
+    border-top: 1px dashed var(--SmartThemeBorderColor, #444);
+    cursor: pointer;
+    border-radius: 8px;
+}
+.nova-phone-contact:hover { background: rgba(255, 255, 255, 0.05); }
+.nova-phone-avatar {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 30%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 60%, transparent);
+}
+.nova-phone-meta { min-width: 0; flex: 1; }
+.nova-phone-meta .nova-inf-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.nova-phone {
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 22px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.18);
+}
+.nova-phone-top { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--SmartThemeBorderColor, #444); }
+.nova-phone-top .nova-inf-btn { font-size: 1.2em; padding: 0 10px; }
+.nova-phone-title { min-width: 0; }
+.nova-phone-info { font-size: 0.8em; opacity: 0.65; margin: 6px 2px; }
+.nova-phone-screen {
+    height: min(52dvh, 460px);
+    overflow-y: auto;
+    padding: 6px 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.nova-phone-sep { align-self: center; font-size: 0.75em; opacity: 0.55; margin: 6px 0; text-align: center; }
+.nova-phone-msg { display: flex; }
+.nova-phone-msg.me { justify-content: flex-end; }
+.nova-phone-msg span {
+    max-width: 78%;
+    padding: 6px 10px;
+    border-radius: 14px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.nova-phone-msg.him span { background: rgba(255, 255, 255, 0.09); border-bottom-left-radius: 4px; }
+.nova-phone-msg.me span { background: var(--SmartThemeQuoteColor, #8ab4f8); color: #111; border-bottom-right-radius: 4px; }
+.nova-phone-typing { opacity: 0.6; font-style: italic; }
+.nova-phone-input { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
+.nova-phone-input textarea { flex: 1; resize: none; margin: 0; }
+.nova-phone-input .nova-inf-btn { white-space: nowrap; }
+.nova-inf-btn[disabled] { opacity: 0.4; cursor: not-allowed; }

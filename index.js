@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.6.3
+// Nova 無限流面板 v0.7.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -15,6 +15,8 @@ const MODES = {
     instance: '副本進行中',
     settle: '結算',
 };
+// 規則可以勾選的模式（通訊器只用在背景生成的訊息，不是聊天模式）
+const RULE_MODES = { lobby: '白域大廳', opening: '副本開局', instance: '副本進行中', settle: '結算', phone: '通訊器' };
 
 const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
@@ -75,6 +77,7 @@ function defaultSettings() {
         deletedRuleIds: [],
         pendingSeed: null,
         playerProfile: '',
+        phone: { contacts: [], cost: 1, history_limit: 30 },
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
     };
 }
@@ -469,6 +472,8 @@ function endInstance(end) {
     }
     // 僅限本副本的道具在離開時消失
     s.inventory.items = s.inventory.items.filter(it => !(it.instance_id === inst.id && it.carry_rule === '僅限本副本'));
+    const added = makeContacts(inst, end);
+    if (added) setTimeout(() => toast(`📱 通訊器多了 ${added} 位聯絡人`, 'success'), 600);
     cs.mode = 'settle';
 }
 
@@ -893,6 +898,315 @@ function commit() {
     renderPanel();
 }
 
+// ───────────────────────── 異世界通訊器 ─────────────────────────
+// 通關 B 級以上、男主活著、好結局離開 → 解鎖聯絡人。傳訊花碎片。對話在背景生成，不進主聊天。
+
+// 現實一天＝他的世界幾天（依難度的預設值，可在聯絡人資料裡改）
+const PHONE_RATIO = { B: 60, A: 50, S: 40 };
+let phoneView = null;      // 目前打開的聯絡人 id
+let phoneBusy = false;
+let phoneDraft = '';
+
+function P() {
+    const s = S();
+    if (!s.phone) s.phone = { contacts: [], cost: 1, history_limit: 30 };
+    if (!Array.isArray(s.phone.contacts)) s.phone.contacts = [];
+    if (s.phone.cost === undefined) s.phone.cost = 1;
+    if (!s.phone.history_limit) s.phone.history_limit = 30;
+    return s.phone;
+}
+
+function diffLetter(d) {
+    const m = String(d || '').trim().toUpperCase().match(/^[EDCBAS]/);
+    return m ? m[0] : '';
+}
+
+function contactName(c) {
+    return c.revealed && c.real_name ? c.real_name : (c.codename || c.real_name || '未知');
+}
+
+// 副本結束時呼叫：符合條件的男主建立聯絡人。回傳新增人數
+function makeContacts(inst, end) {
+    const letter = diffLetter(inst.difficulty);
+    if (!['B', 'A', 'S'].includes(letter)) return 0;
+    if (/失敗|壞結局/.test(end.result || '') || end.exit_type === '強制召回') return 0;
+    const ph = P();
+    const fates = Array.isArray(end.cast_fate) ? end.cast_fate : null;
+    let added = 0;
+    for (const c of inst.cast) {
+        if (ph.contacts.find(x => x.instance_id === inst.id && x.codename === c.codename)) continue;
+        const f = fates?.find(x => (x.codename && x.codename === c.codename) || (x.real_name && x.real_name === c.real_name));
+        if (fates && !f) continue;
+        if (f && (f.alive === false || f.good_ending !== true)) continue;
+        if (!f && c.role !== '主要') continue;
+        ph.contacts.push({
+            id: 'ph_' + Date.now() + '_' + added,
+            instance_id: inst.id, instance_name: inst.name, worldline: inst.worldline, difficulty: inst.difficulty,
+            world: inst.axes?.world || '', era: clone(inst.era), result: end.result || '',
+            codename: c.codename, real_name: c.real_name, revealed: !!c.revealed,
+            identity: c.identity, this_life: c.this_life, appearance: c.appearance,
+            relation_type: c.relation_type, history_length: c.history_length, promise: c.promise,
+            remnant: c.remnant, obsession_stage: c.obsession_stage, affinity: c.affinity,
+            her_identity: [inst.identity_card?.name, inst.identity_card?.social_role].filter(Boolean).join('／'),
+            personality: f?.personality || '', calls_her: f?.calls_her || '', story: f?.story || '',
+            state: f?.state || '', last_moment: f?.last_moment || '', device: f?.device || '',
+            days_spent: inst.calendar?.day || 0,
+            ratio: PHONE_RATIO[letter] || 50,
+            world_elapsed_days: 0, last_real_ts: Date.now(),
+            now: '', memories: [], messages: [],
+            locked: !f, lock_reason: f ? '' : 'AI 沒有回報他的結局，需要你確認他活著、而且是好結局',
+            unread: 0,
+        });
+        added++;
+    }
+    return added;
+}
+
+function phoneGapDays(c) {
+    return Math.max(0, (Date.now() - (c.last_real_ts || Date.now())) / 86400000) * (c.ratio || 50);
+}
+
+function phoneRulesText() {
+    return S().rules.filter(r => r.enabled && (r.modes || []).includes('phone')).map(r => r.content).join('\n\n');
+}
+
+function phoneSystemPrompt(c) {
+    const s = S();
+    const name = contactName(c);
+    let t = phoneRulesText() + '\n\n';
+    t += `【他的資料】\n`;
+    t += line('他在那個世界的名字', c.codename);
+    if (c.real_name) t += line('他的本體（對應的成員）', c.real_name);
+    t += line('身份', c.identity) + line('今生經歷', c.this_life) + line('外貌', c.appearance);
+    t += line('性格與說話方式', c.personality) + line('他怎麼稱呼她', c.calls_her);
+    t += line('與她的關係', c.relation_type) + line('相處時長', c.history_length);
+    t += line('你們的故事', c.story) + line('承諾', c.promise) + line('殘留', c.remnant) + line('執念階段', c.obsession_stage);
+    t += line('她離開時他的處境', c.state) + line('最後的相處', c.last_moment);
+    t += `\n【他的世界】\n` + line('副本', c.instance_name) + line('世界', c.world);
+    t += line('科技程度', c.era?.tech_level) + line('時代限制', c.era?.anachronism);
+    t += line('他那一側的通訊裝置', c.device || '配合他的時代，由你決定，前後一致');
+    t += line('她在那個世界的身份', c.her_identity);
+    t += `她在那個世界生活了 ${fmtDays(c.days_spent)}，以好結局離開。\n`;
+    if (c.now) t += line('他最近的近況', c.now);
+    if (c.memories?.length) t += '\n【通訊中累積、需要記住的事】\n' + c.memories.map(m => '- ' + m).join('\n') + '\n';
+    if (s.playerProfile?.trim()) t += '\n【她的現實生活】（他只知道她在訊息裡告訴他的部分）\n' + s.playerProfile.trim() + '\n';
+    t += `\n【輸出格式】
+只輸出 ${name} 傳來的訊息，每則一行，一次一至五則，不加名字前綴、不加引號。
+最後一行輸出：<phone_state>{"now":"他目前的近況（一句）","remember":"這次對話中他或她說了、之後需要記住的新事；沒有則留空"}</phone_state>`;
+    return sub(t);
+}
+
+function phoneConversation(c) {
+    const ph = P();
+    const name = contactName(c);
+    const user = sub('{{user}}');
+    const msgs = c.messages.slice(-ph.history_limit);
+    let t = '【通訊紀錄】\n';
+    if (msgs.length < c.messages.length) t += '（更早的紀錄省略）\n';
+    let lastDay = msgs.length ? msgs[0].world_day : 0;
+    for (const m of msgs) {
+        if (m.world_day - lastDay >= 1) t += `（他那邊過了 ${fmtDays(m.world_day - lastDay)}）\n`;
+        lastDay = m.world_day;
+        t += `${m.from === 'user' ? user : name}：${m.text}\n`;
+    }
+    const lastUserIdx = c.messages.map(m => m.from).lastIndexOf('user');
+    const prevHim = c.messages.slice(0, lastUserIdx).filter(m => m.from === 'him').pop();
+    const lastUser = c.messages[lastUserIdx];
+    t += `\n她離開後，他的世界至今已經過了 ${fmtDays(c.world_elapsed_days)}。`;
+    if (lastUser) {
+        const ref = prevHim ? prevHim.world_day : 0;
+        t += prevHim ? `距離他上一次傳訊，他那邊過了 ${fmtDays(lastUser.world_day - ref)}。` : '這是她離開後第一次聯絡他。';
+    }
+    t += `\n請以 ${name} 的身份回覆。`;
+    return sub(t);
+}
+
+async function genRaw(systemPrompt, prompt) {
+    const fn = ctx().generateRaw;
+    if (typeof fn !== 'function') throw new Error('這個版本的酒館不支援背景生成，請更新酒館');
+    const src = Function.prototype.toString.call(fn);
+    if (/^\s*(async\s+)?(function\s*)?\w*\s*\(\s*\{/.test(src)) return await fn({ prompt, systemPrompt });
+    return await fn(prompt, null, false, false, systemPrompt);
+}
+
+function parsePhoneReply(raw, c) {
+    let text = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
+    let state = null;
+    const m = text.match(/<phone_state>([\s\S]*?)<\/phone_state>/i);
+    if (m) { state = parseJsonLoose(m[1]); text = text.replace(m[0], ''); }
+    const name = contactName(c);
+    const lines = text.split(/\n+/).map(l => l.trim())
+        .map(l => l.replace(new RegExp(`^(${name}|${c.codename || '\\u0000'}|${c.real_name || '\\u0000'})\\s*[：:]\\s*`), ''))
+        .map(l => l.replace(/^[「"](.*)[」"]$/, '$1'))
+        .filter(Boolean);
+    return { lines, state };
+}
+
+async function phoneGenerate(c) {
+    const raw = await genRaw(phoneSystemPrompt(c), phoneConversation(c));
+    const { lines, state } = parsePhoneReply(raw, c);
+    if (!lines.length) throw new Error('AI 沒有回覆內容');
+    const now = Date.now();
+    for (const l of lines) c.messages.push({ from: 'him', text: l, ts: now, world_day: c.world_elapsed_days });
+    if (state?.now) c.now = state.now;
+    if (state?.remember) { c.memories.push(state.remember); if (c.memories.length > 20) c.memories.shift(); }
+}
+
+async function phoneSend(id, text) {
+    const ph = P();
+    const s = S();
+    const c = ph.contacts.find(x => x.id === id);
+    if (!c || phoneBusy) return;
+    text = text.trim();
+    if (!text) return;
+    const cost = Number(ph.cost) || 0;
+    if ((s.inventory.shards || 0) < cost) { toast(`碎片不足，傳一則訊息需要 ${cost} 碎片`, 'warning'); return; }
+    s.inventory.shards -= cost;
+    const gap = phoneGapDays(c);
+    c.world_elapsed_days += gap;
+    c.last_real_ts = Date.now();
+    c.messages.push({ from: 'user', text, ts: Date.now(), world_day: c.world_elapsed_days });
+    phoneDraft = '';
+    phoneBusy = true;
+    saveSettings(); renderPanel();
+    try {
+        await phoneGenerate(c);
+    } catch (e) {
+        console.warn('[Nova無限流] 通訊失敗', e);
+        c.messages.pop();
+        c.world_elapsed_days -= gap;
+        s.inventory.shards += cost;
+        phoneDraft = text;
+        toast('訊息沒有送達：' + (e.message || e) + '（已退回碎片）', 'error');
+    }
+    phoneBusy = false;
+    saveSettings(); renderPanel();
+}
+
+async function phoneReroll(id) {
+    const c = P().contacts.find(x => x.id === id);
+    if (!c || phoneBusy) return;
+    const backup = clone(c.messages);
+    while (c.messages.length && c.messages[c.messages.length - 1].from === 'him') c.messages.pop();
+    if (!c.messages.length) { c.messages = backup; return; }
+    phoneBusy = true; renderPanel();
+    try { await phoneGenerate(c); } catch (e) { c.messages = backup; toast('重新生成失敗：' + (e.message || e), 'error'); }
+    phoneBusy = false;
+    saveSettings(); renderPanel();
+}
+
+function renderPhone() {
+    const ph = P();
+    const s = S();
+    const c = phoneView && ph.contacts.find(x => x.id === phoneView);
+    if (c) return renderPhoneChat(c);
+    phoneView = null;
+    const open = ph.contacts.filter(x => !x.locked);
+    const locked = ph.contacts.filter(x => x.locked);
+    const item = (x) => {
+        const last = x.messages[x.messages.length - 1];
+        const total = x.world_elapsed_days + phoneGapDays(x);
+        return `<div class="nova-phone-contact" data-act="phone_open" data-id="${x.id}">
+            <div class="nova-phone-avatar">${esc(contactName(x).slice(0, 1))}</div>
+            <div class="nova-phone-meta">
+                <div><b>${esc(contactName(x))}</b> <span class="nova-inf-sub">${esc(x.instance_name)}｜${esc(x.difficulty)}</span></div>
+                <div class="nova-inf-sub">${last ? esc((last.from === 'user' ? '你：' : '') + last.text).slice(0, 40) : '還沒有聯絡過'}</div>
+                <div class="nova-inf-sub">他那邊已過 ${fmtDays(total)}</div>
+            </div></div>`;
+    };
+    return card('📱 異世界通訊器', `
+        <p class="nova-inf-sub">碎片 <b>${s.inventory.shards || 0}</b>｜每則訊息 ${ph.cost} 碎片</p>
+        ${open.length ? open.map(item).join('') : '<p class="nova-inf-empty">還沒有可以聯絡的人。</p>'}`) +
+        (locked.length ? card('等待確認', `
+        <p class="nova-inf-hint">這些副本符合難度與結局，但 AI 沒有回報男主的結局。確認他活著、而且是好結局離開，再手動開通。</p>
+        ${locked.map(x => `<div class="nova-inf-item"><b>${esc(contactName(x))}</b> <span class="nova-inf-sub">${esc(x.instance_name)}｜${esc(x.difficulty)}｜${esc(x.result)}</span>
+            <div class="nova-inf-row">${btn('phone_unlock', '開通', `data-id="${x.id}"`, 'primary')}${btn('phone_del', '🗑 刪除', `data-id="${x.id}"`, 'danger')}</div></div>`).join('')}`) : '') +
+        `<details class="nova-inf-card nova-inf-more"><summary>開通條件與說明</summary>
+        <ul class="nova-inf-ol">
+            <li>通關 <b>B 級以上</b>的副本，男主<b>活著</b>、而且你是以<b>好結局</b>離開，他就會出現在這裡。</li>
+            <li>每傳一則訊息花碎片。他回覆失敗時，碎片會退回。</li>
+            <li>他的世界時間比現實快：你隔一天再傳，他那邊可能已經過了兩個月。</li>
+            <li>他沒辦法離開自己的世界，也不會影響之後的副本。</li>
+            <li>對話不會出現在主聊天裡，換聊天也不會消失。</li>
+            <li>他說話的規則在「規則」分頁，模式勾「通訊器」的那幾條。</li>
+        </ul>
+        <label class="nova-inf-label">每則訊息花費的碎片<input class="nova-inf-input" type="number" min="0" data-phone-set="cost" value="${ph.cost}"></label>
+        <label class="nova-inf-label">送給 AI 的對話紀錄則數<input class="nova-inf-input" type="number" min="5" data-phone-set="history_limit" value="${ph.history_limit}"></label>
+        </details>`;
+}
+
+function renderPhoneChat(c) {
+    const s = S();
+    const ph = P();
+    const name = contactName(c);
+    let lastDay = 0;
+    let bubbles = '';
+    c.messages.forEach((m, i) => {
+        const d = m.world_day - lastDay;
+        if (i === 0 || d >= 1) bubbles += `<div class="nova-phone-sep">${i === 0 ? `你離開後 ${fmtDays(m.world_day)}` : `他那邊過了 ${fmtDays(d)}`}</div>`;
+        lastDay = m.world_day;
+        bubbles += `<div class="nova-phone-msg ${m.from === 'user' ? 'me' : 'him'}"><span>${esc(m.text)}</span></div>`;
+    });
+    if (phoneBusy) bubbles += `<div class="nova-phone-msg him"><span class="nova-phone-typing">對方輸入中…</span></div>`;
+    const lastIsHim = c.messages.length && c.messages[c.messages.length - 1].from === 'him';
+    const cost = Number(ph.cost) || 0;
+    const canSend = !phoneBusy && (s.inventory.shards || 0) >= cost;
+    return `<div class="nova-phone">
+        <div class="nova-phone-top">
+            ${btn('phone_back', '‹')}
+            <div class="nova-phone-title"><b>${esc(name)}</b>
+                <div class="nova-inf-sub">${esc(c.instance_name)}${c.device ? '｜' + esc(c.device) : ''}</div></div>
+        </div>
+        <div class="nova-phone-info">他那邊自你離開已過 ${fmtDays(c.world_elapsed_days + phoneGapDays(c))}${c.now ? `<br>近況：${esc(c.now)}` : ''}</div>
+        <div class="nova-phone-screen" id="nova_phone_screen">${bubbles || '<div class="nova-phone-sep">還沒有訊息</div>'}</div>
+        <div class="nova-phone-input">
+            <textarea class="nova-inf-input" id="nova_phone_input" rows="2" placeholder="傳訊息給${esc(name)}…" ${phoneBusy ? 'disabled' : ''}>${esc(phoneDraft)}</textarea>
+            ${btn('phone_send', `傳送${cost ? `（${cost} 碎片）` : ''}`, `data-id="${c.id}" ${canSend ? '' : 'disabled'}`, 'primary')}
+        </div>
+        ${(s.inventory.shards || 0) < cost ? '<p class="nova-inf-hint nova-inf-warn">碎片不足</p>' : ''}
+        <div class="nova-inf-row">
+            ${lastIsHim ? btn('phone_reroll', '↻ 重新生成他的回覆', `data-id="${c.id}" ${phoneBusy ? 'disabled' : ''}`) : ''}
+            ${btn('phone_edit', '他的資料', `data-id="${c.id}"`)}
+            ${btn('phone_clear', '清空對話', `data-id="${c.id}"`, 'danger')}
+            ${btn('phone_del', '🗑 刪除聯絡人', `data-id="${c.id}"`, 'danger')}
+        </div>
+    </div>`;
+}
+
+function onPhoneAction(act, b) {
+    const ph = P();
+    const id = b.dataset.id;
+    const c = ph.contacts.find(x => x.id === id);
+    const inputVal = () => document.getElementById('nova_phone_input')?.value || '';
+    switch (act) {
+        case 'phone_open': phoneView = id; phoneDraft = ''; if (c) c.unread = 0; renderPanel(); scrollPhone(); return true;
+        case 'phone_back': phoneDraft = inputVal(); phoneView = null; renderPanel(); return true;
+        case 'phone_send': phoneSend(id, inputVal()).then(scrollPhone); scrollPhone(); return true;
+        case 'phone_reroll': phoneReroll(id).then(scrollPhone); return true;
+        case 'phone_unlock':
+            if (c && confirm(`確定 ${contactName(c)} 活著，而且你是以好結局離開？`)) { c.locked = false; c.lock_reason = ''; c.last_real_ts = Date.now(); saveSettings(); renderPanel(); }
+            return true;
+        case 'phone_edit':
+            if (c) openEditor(`${contactName(c)} 的資料`, c, v => { Object.assign(c, v, { id: c.id }); });
+            return true;
+        case 'phone_clear':
+            if (c && confirm('清空和他的對話？（他累積的記憶也會一起清掉，時間不會倒流）')) { c.messages = []; c.memories = []; c.now = ''; saveSettings(); renderPanel(); }
+            return true;
+        case 'phone_del':
+            if (c && confirm(`刪除聯絡人 ${contactName(c)}？對話會一起刪掉，無法復原。`)) {
+                ph.contacts = ph.contacts.filter(x => x.id !== id);
+                if (phoneView === id) phoneView = null;
+                saveSettings(); renderPanel();
+            }
+            return true;
+    }
+    return false;
+}
+
+function scrollPhone() {
+    setTimeout(() => { const el = document.getElementById('nova_phone_screen'); if (el) el.scrollTop = el.scrollHeight; }, 0);
+}
+
 // ───────────────────────── UI ─────────────────────────
 
 const TABS = [
@@ -904,6 +1218,7 @@ const TABS = [
     ['bag', '🎒 背包'],
     ['glossary', '📖 辭典'],
     ['worlds', '✨ 世界線'],
+    ['phone', '📱 通訊器'],
     ['sealed', '🔒 封存'],
     ['profile', '🙋 玩家檔案'],
     ['rules', '📜 規則'],
@@ -941,6 +1256,12 @@ function ensurePanel() {
     });
     document.getElementById('nova_inf_body').addEventListener('click', onBodyClick);
     document.getElementById('nova_inf_body').addEventListener('change', onBodyChange);
+    document.getElementById('nova_inf_body').addEventListener('input', ev => { if (ev.target.id === 'nova_phone_input') phoneDraft = ev.target.value; });
+    document.getElementById('nova_inf_body').addEventListener('keydown', ev => {
+        if (ev.target.id === 'nova_phone_input' && ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && phoneView) {
+            ev.preventDefault(); phoneSend(phoneView, ev.target.value).then(scrollPhone);
+        }
+    });
 }
 
 function togglePanel() {
@@ -976,12 +1297,13 @@ function renderPanel() {
         b.classList.toggle('dim', INSTANCE_TABS.includes(b.dataset.tab) && !cs?.instance);
     });
     const badge = document.getElementById('nova_inf_mode_badge');
+    if (!cs && currentTab === 'phone') { badge.textContent = ''; body.innerHTML = renderPhone(); return; }
     if (!cs) { body.innerHTML = '<p class="nova-inf-empty">請先開啟一個聊天。</p>'; badge.textContent = ''; return; }
     badge.textContent = MODES[cs.mode] + (cs.lock ? '｜獨處鎖' : '');
     const renderers = {
         overview: renderOverview, people: renderPeople, clues: renderClues, calendar: renderCalendar,
         bag: renderBag, world: renderWorldMap, glossary: renderGlossary, worlds: renderWorlds, sealed: renderSealed,
-        profile: renderProfile, rules: renderRules, settings: renderSettingsTab, help: renderHelp,
+        profile: renderProfile, rules: renderRules, settings: renderSettingsTab, help: renderHelp, phone: renderPhone,
     };
     body.innerHTML = renderers[currentTab]();
 }
@@ -1155,6 +1477,7 @@ function renderHelp() {
     sec('每個分頁做什麼', `
         <ul class="nova-inf-ol">
             <li><b>總覽</b>：目前在哪一步、下一步要做什麼、副本進度、獨處鎖</li>
+            <li><b>通訊器</b>：通關 B 級以上、好結局離開後，可以花碎片傳訊息給那個世界的他</li>
             <li><b>人物</b>：男主（代號）、副本裡的人、勢力、你的身份卡，可以寫自己的筆記</li>
             <li><b>線索</b>：依幕分組的線索與伏筆，未出現的會上鎖</li>
             <li><b>地圖</b>：地區、目前位置、這個世界的生活設施</li>
@@ -1397,9 +1720,9 @@ function renderRules() {
         <details class="nova-inf-card" ${openRuleId === r.id ? 'open' : ''} data-rule-id="${esc(r.id)}">
             <summary><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
                 ${r.custom ? '<span class="nova-inf-chip">自訂</span>' : ''}
-                <span class="nova-inf-sub">${(r.modes || []).map(m => MODES[m] || m).join('、') || '未指定模式（不會送出）'}</span></summary>
+                <span class="nova-inf-sub">${(r.modes || []).map(m => RULE_MODES[m] || m).join('、') || '未指定模式（不會送出）'}</span></summary>
             <label class="nova-inf-label">標題<input class="nova-inf-input" data-rule-title="${i}" value="${esc(r.title)}"></label>
-            <div class="nova-inf-row">${Object.entries(MODES).filter(([k]) => k !== 'off').map(([k, v]) =>
+            <div class="nova-inf-row">${Object.entries(RULE_MODES).map(([k, v]) =>
                 `<label class="nova-inf-chip"><input type="checkbox" data-rule-mode="${i}" value="${k}" ${(r.modes || []).includes(k) ? 'checked' : ''}>${v}</label>`).join('')}</div>
             <textarea class="nova-inf-input nova-inf-rule" rows="10" data-rule-text="${i}">${esc(r.content)}</textarea>
             <div class="nova-inf-row">
@@ -1501,6 +1824,7 @@ function onBodyClick(ev) {
     const b = ev.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
+    if (act.startsWith('phone_')) { onPhoneAction(act, b); return; }
     const cs = C();
     const s = S();
     const inst = cs?.instance;
@@ -1740,8 +2064,9 @@ function onBodyClick(ev) {
             if (confirm('清空全部帳本與世界線紀錄？')) { s.ledger = []; s.worldlines = []; commit(); }
             break;
         case 'reset_all':
-            if (confirm('清空全部遊玩資料？（帳本、世界線、背包、碎片、現實獎勵、白域詞彙）') && confirm('真的確定嗎？這無法復原。')) {
+            if (confirm('清空全部遊玩資料？（帳本、世界線、背包、碎片、現實獎勵、白域詞彙、通訊器聯絡人）') && confirm('真的確定嗎？這無法復原。')) {
                 s.ledger = []; s.worldlines = []; s.inventory = { shards: 0, items: [] }; s.rewards = []; s.glossary_global = [];
+                P().contacts = []; phoneView = null;
                 commit();
             }
             break;
@@ -1808,6 +2133,7 @@ function onBodyChange(ev) {
         openRuleId = r.id;
         saveSettings(); renderPanel(); return;
     }
+    if (t.dataset.phoneSet) { const ph = P(); ph[t.dataset.phoneSet] = Math.max(0, Number(t.value) || 0); saveSettings(); return; }
     if (t.dataset.set === 'bannedWords') { s.bannedWords = t.value; saveSettings(); return; }
     if (t.dataset.set) {
         const k = t.dataset.set;
