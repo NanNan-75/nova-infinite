@@ -308,7 +308,20 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
      "snapshot": {"社交能量": "", "移動偏好": "", "信任形成": "", "衝突風格": "", "體能取向": "", "社交表現": "", "個人空間": ""}},
   "calendar": {"calendar_name": "曆法名稱", "date_label": "當前日期", "time_label": "時段",
      "events": [{"id": "e1", "day": 5, "title": "事件", "sealed": true}]},
-  "glossary": [{"term": "名詞", "desc": "解釋"}]
+  "glossary": [{"term": "名詞", "desc": "解釋"}],
+  "era": {
+    "tech_level": "這個世界的技術與生活水準，一兩句話",
+    "anachronism": "若有不符合時代的便利設施，說明為什麼存在；沒有就留空"
+  },
+  "map": {
+    "start": "{{user}} 開局所在的地區名稱",
+    "regions": [
+      {"name": "地區名", "desc": "這裡是什麼樣的地方", "access": "誰能進出、需要什麼條件", "travel": "從其他地區怎麼過來、要多久", "danger": "安全／普通／危險", "sealed_note": "這裡藏著什麼（封存，可留空）"}
+    ]
+  },
+  "daily_life": [
+    {"function": "通訊", "local_name": "這個世界的叫法", "desc": "怎麼運作、長什麼樣子", "access": "誰用得起、怎麼取得、要花多少"}
+  ]
 }
 </inf_open>
 
@@ -316,6 +329,10 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
 - 大型主線建議 4–5 幕，每幕 3–4 條線索，其中 1 條為誤導；每幕至少 2 條線索需經由男主取得。
 - 線索分表／中／深三層；深層線索只能在前一幕真相解開後出現。
 - 封存事件（sealed: true）是玩家不知道、但到了那天必定發生的事。
+- 地圖至少 4 個地區，包含 {{user}} 的起點；主要男主通常分散在不同地區，彼此之間需要交通工具或時間才能抵達。
+- daily_life 至少涵蓋：通訊、交通、購物補給、照明、食物保存、貨幣、資訊來源、醫療、計時。每一項都依世界的時代與技術水準設計，並取這個世界自己的名字。
+- 便利程度必須符合時代：古代沒有冰箱、電燈、手機；若世界線是混搭（例如未來科技 × 宮廷），可以出現超時代的設施，但要在 era.anachronism 說明，且要符合該世界的權力結構（例如只有皇族用得起）。
+- 正文描寫時，一律使用 local_name，不得用現代用語稱呼（不說「手機」「計程車」「超商」，除非這個世界真的這樣叫）。
 - 此標籤玩家看不到，所有真相與真名只寫在這裡，不得出現在正文。`;
 
 // 每回合可輸出的更新標籤
@@ -336,6 +353,9 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
   "event_fired": ["e1"],
   "event_add": [{"id": "e4", "day": 9, "title": "", "sealed": true}],
   "glossary_add": [{"term": "", "desc": ""}],
+  "location": "{{user}} 移動後所在的地區名稱（有移動才寫）",
+  "region_add": [{"name": "", "desc": "", "access": "", "travel": "", "danger": "", "sealed_note": ""}],
+  "life_add": [{"function": "", "local_name": "", "desc": "", "access": ""}],
   "concession": {"giver": "代號", "what": "讓渡了什麼", "form": "形式", "cost": "代價", "consequence": "埋下的後續"},
   "cast_update": [{"codename": "代號", "affinity_delta": 2, "revealed": false, "obsession_stage": ""}],
   "people_add": [{"name": "", "identity": "", "faction": "", "observed_attitude": "", "hidden_truth": ""}],

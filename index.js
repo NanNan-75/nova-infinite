@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.3.1
+// Nova 無限流面板 v0.4.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -126,6 +126,9 @@ function blankInstance() {
         identity_card: { name: '', age: '', social_role: '', family: '', restrictions: '', range: '', friction: '', snapshot: {} },
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
         glossary: [], concessions: [],
+        era: { tech_level: '', anachronism: '' },
+        map: { regions: [] }, location: '',
+        daily_life: [],
         ended: false,
     };
 }
@@ -237,6 +240,10 @@ function applyOpen(obj) {
         inst.calendar.events = (obj.calendar.events || []).map((e, i) => normEvent(e, i));
     }
     inst.glossary = (obj.glossary || []).map(g => ({ term: g.term || '', desc: g.desc || '', revealed: true }));
+    if (obj.era) inst.era = Object.assign(inst.era, obj.era);
+    inst.map.regions = (obj.map?.regions || []).map(normRegion);
+    inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
+    inst.daily_life = (obj.daily_life || []).map(normLife);
     cs.instance = inst;
     cs.mode = 'instance';
     return `副本「${inst.name || '未命名'}」已建立`;
@@ -256,6 +263,14 @@ function normCast(c) {
         real_name: '', affinity: 100, history_length: '', relation_type: '', promise: '', obsession_stage: '',
         last_seen_turn: 0,
     }, c);
+}
+
+function normRegion(r) {
+    return Object.assign({ name: '', desc: '', access: '', travel: '', danger: '', sealed_note: '', visited: false }, r);
+}
+
+function normLife(l) {
+    return Object.assign({ function: '', local_name: '', desc: '', access: '' }, l);
 }
 
 function normEvent(e, i) {
@@ -336,6 +351,26 @@ function applyTurn(o) {
     (o.item_remove || []).forEach(name => {
         const i = inv.items.findIndex(x => x.name === name);
         if (i >= 0) inv.items.splice(i, 1);
+    });
+
+    if (!inst.map) inst.map = { regions: [] };
+    if (!inst.daily_life) inst.daily_life = [];
+    (o.region_add || []).forEach(r => {
+        if (!r.name) return;
+        const ex = inst.map.regions.find(x => x.name === r.name);
+        if (ex) Object.assign(ex, Object.fromEntries(Object.entries(r).filter(([, v]) => v)));
+        else { inst.map.regions.push(normRegion(r)); log.push(`地圖新增「${r.name}」`); }
+    });
+    if (o.location && o.location !== inst.location) {
+        inst.location = o.location;
+        const reg = inst.map.regions.find(x => x.name === o.location);
+        if (reg) reg.visited = true;
+        log.push(`移動到「${o.location}」`);
+    }
+    (o.life_add || []).forEach(l => {
+        if (!l.local_name) return;
+        const ex = inst.daily_life.find(x => x.local_name === l.local_name);
+        if (ex) Object.assign(ex, l); else inst.daily_life.push(normLife(l));
     });
 
     if (o.mechanic_revealed) inst.mechanic_revealed = true;
@@ -550,6 +585,17 @@ function buildStateText() {
     if (upcoming.length) t += '\n【已知行程】\n' + upcoming.map(e => `- 第 ${e.day} 天：${e.title}`).join('\n') + '\n';
     if (due.length) t += '\n【封存事件已到期｜必須在本回合或下一回合讓它發生，發生後以 event_fired 回報】\n' + due.map(e => `- [${e.id}] ${e.title}`).join('\n') + '\n';
 
+    if (inst.era?.tech_level) t += `\n【時代與技術】${inst.era.tech_level}${inst.era.anachronism ? `｜超時代設施：${inst.era.anachronism}` : ''}\n`;
+    if (inst.map?.regions?.length) {
+        t += `\n【地圖】{{user}} 目前位於：${inst.location || '未知'}\n`;
+        inst.map.regions.forEach(r => {
+            t += `- ${r.name}${r.name === inst.location ? '（目前位置）' : ''}｜${r.desc}｜出入：${r.access}｜交通：${r.travel}｜${r.danger}${r.sealed_note ? `｜【封存】${r.sealed_note}` : ''}\n`;
+        });
+    }
+    if (inst.daily_life?.length) {
+        t += '\n【這個世界的生活設施】（正文一律使用這裡的叫法，不用現代用語）\n';
+        inst.daily_life.forEach(l => { t += `- ${l.function}：${l.local_name}｜${l.desc}｜${l.access}\n`; });
+    }
     if (inst.glossary.length) t += '\n【副本辭典】\n' + inst.glossary.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
 
     const items = s.inventory.items;
@@ -780,6 +826,7 @@ const TABS = [
     ['clues', '線索'],
     ['calendar', '日曆'],
     ['bag', '背包'],
+    ['world', '地圖'],
     ['glossary', '辭典'],
     ['worlds', '世界線'],
     ['sealed', '封存'],
@@ -849,7 +896,7 @@ function renderPanel() {
     badge.textContent = MODES[cs.mode] + (cs.lock ? '｜獨處鎖' : '');
     const renderers = {
         overview: renderOverview, people: renderPeople, clues: renderClues, calendar: renderCalendar,
-        bag: renderBag, glossary: renderGlossary, worlds: renderWorlds, sealed: renderSealed,
+        bag: renderBag, world: renderWorldMap, glossary: renderGlossary, worlds: renderWorlds, sealed: renderSealed,
         rules: renderRules, settings: renderSettingsTab,
     };
     body.innerHTML = renderers[currentTab]();
@@ -1030,6 +1077,31 @@ function renderBag() {
         ${s.rewards.map((r, i) => `<div class="nova-inf-item">${esc(r.instance_name || '')}｜${esc(r.reward_tier || '')}｜願望：${esc(r.wish)}｜${r.redeemed ? '已兌現' : '未兌現'}
             <div class="nova-inf-row">${btn('reward_toggle', r.redeemed ? '標記未兌現' : '標記已兌現', `data-i="${i}"`)}${delBtn('rewards', i)}</div></div>`).join('') || '<p class="nova-inf-empty">還沒有許過願</p>'}`,
         btn('reward_add', '＋ 許願') + btn('edit_rewards', '編輯'));
+}
+
+function renderWorldMap() {
+    const inst = C().instance;
+    if (!inst) return '<p class="nova-inf-empty">目前沒有進行中的副本。</p>';
+    const era = inst.era || {};
+    const regions = inst.map?.regions || [];
+    const life = inst.daily_life || [];
+    return card('時代與技術', `
+        <p>${esc(era.tech_level) || '<span class="nova-inf-empty">未設定</span>'}</p>
+        ${era.anachronism ? `<p class="nova-inf-sub">超時代設施：${esc(era.anachronism)}</p>` : ''}`, btn('edit_era', '編輯')) +
+        card(`地圖｜目前位置：${esc(inst.location || '未知')}`, regions.map((r, i) => `
+        <div class="nova-inf-item ${r.name === inst.location ? 'nova-inf-here' : ''}">
+            <div><b>${esc(r.name)}</b>${r.name === inst.location ? '　📍' : ''}｜${esc(r.danger)}</div>
+            <div class="nova-inf-sub">${esc(r.desc)}</div>
+            <div class="nova-inf-sub">出入：${esc(r.access)}｜交通：${esc(r.travel)}</div>
+            ${r.sealed_note ? `<div class="nova-inf-sub">藏著的東西：${sealedVal(r.sealed_note)}</div>` : ''}
+            <div class="nova-inf-row">${r.name !== inst.location ? btn('move_here', '設為目前位置', `data-i="${i}"`) : ''}${delBtn('regions', i)}</div>
+        </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('region_add', '＋ 新增') + btn('edit_regions', '編輯')) +
+        card('生活設施', life.map((l, i) => `
+        <div class="nova-inf-item"><b>${esc(l.function)}</b>：${esc(l.local_name)}
+            <div class="nova-inf-sub">${esc(l.desc)}</div>
+            <div class="nova-inf-sub">${esc(l.access)}</div>
+            <div class="nova-inf-row">${delBtn('life', i)}</div></div>`).join('') || '<p class="nova-inf-empty">無</p>',
+        btn('edit_life', '編輯'));
 }
 
 function renderGlossary() {
@@ -1224,6 +1296,19 @@ function onBodyClick(ev) {
                 resetChatInstance('off');
             }
             break;
+        case 'move_here': { const r = inst?.map?.regions[Number(b.dataset.i)]; if (r) { inst.location = r.name; r.visited = true; commit(); } break; }
+        case 'region_add': if (inst) {
+            const name = prompt('地區名稱'); if (!name) break;
+            const desc = prompt('描述') || '';
+            inst.map.regions.push(normRegion({ name, desc }));
+            commit();
+        } break;
+        case 'edit_era': if (inst) openEditor('時代與技術', inst.era || {}, v => { inst.era = v; }); break;
+        case 'edit_regions': if (inst) {
+            const keys = ['sealed_note'];
+            openEditor('地圖' + (peek ? '' : '（封存欄位已隱藏，儲存時會保留）'), stripKeys(inst.map.regions, keys), v => { inst.map.regions = mergeKeys(inst.map.regions, v, keys).map(normRegion); });
+        } break;
+        case 'edit_life': if (inst) openEditor('生活設施', inst.daily_life || [], v => { inst.daily_life = v.map(normLife); }); break;
         case 'seed_clear': if (confirm('清空種子卡？')) { cs.seed = {}; commit(); } break;
         case 'identity_clear': if (inst && confirm('清空身份卡？')) { inst.identity_card = blankInstance().identity_card; commit(); } break;
         case 'del': {
@@ -1232,7 +1317,8 @@ function onBodyClick(ev) {
             const lists = {
                 cast: () => inst?.cast, people: () => inst?.people, factions: () => inst?.factions,
                 clues: () => inst?.clues, events: () => inst?.calendar?.events, glossary: () => inst?.glossary,
-                concessions: () => inst?.concessions, glossary_global: () => s.glossary_global, rewards: () => s.rewards,
+                concessions: () => inst?.concessions, regions: () => inst?.map?.regions, life: () => inst?.daily_life,
+                glossary_global: () => s.glossary_global, rewards: () => s.rewards,
             };
             const arr = lists[list]?.();
             if (!arr) break;
