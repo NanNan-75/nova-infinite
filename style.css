@@ -428,3 +428,6 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 #nova_inf_ball.open { opacity: 1; font-size: 18px; }
 #nova_inf_ball.nova-inf-hidden { display: none; }
 #nova_inf_settings .menu_button + .menu_button { margin-top: 6px; }
+
+/* ───── v0.10 汙染度 ───── */
+.nova-inf-pollution > div { background: linear-gradient(90deg, #8e5aa8, #b23a48); }

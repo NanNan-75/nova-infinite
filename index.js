@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.9.4
+// Nova 無限流面板 v0.11.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -18,7 +18,8 @@ const MODES = {
 // 規則可以勾選的模式（通訊器只用在背景生成的訊息，不是聊天模式）
 const RULE_MODES = { lobby: '白域大廳', opening: '副本開局', instance: '副本進行中', settle: '結算', phone: '通訊器' };
 
-const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage'];
+const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage',
+    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
 const SEALED_FACTION_KEYS = ['true_goal', 'related'];
 const SEALED_THREAD_KEYS = ['target'];
@@ -81,6 +82,8 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        autoDossier: true,      // 開局後在背景生成男主人生檔案
+        offscreenEvery: 6,      // 每幾回合請 AI 回報男主的幕後行動
         rollWorlds: true,       // 白域大廳由插件抽世界線
         rollCount: 3,
         worldPool: '歐洲宮廷、東亞古代王朝、東方仙俠、志怪、武俠江湖、民國租界、西部荒野、都市怪談、校園、修道院、希臘神話、北歐神話、埃及神話、凱爾特神話、東方神話、童話、民間傳說、異界旅館、書中世界、夢境、馬戲團、巡迴劇團、遊樂園、蒸汽龐克、深海、極地、沙漠、雨林、群島航海、後末日廢土、未來都市、賽博龐克、太空站、星際殖民地、海上浮城、空中城市、地下城市、維多利亞倫敦、文藝復興水都、大航海時代、遊牧草原、絲路商隊、現代都市、豪華郵輪、長途列車、電影片場、博物館、百貨公司、賭城、古代競技場、魔法學院、獸人國度、精靈森林、龍族領地、機械人城市、平行現代、娛樂圈、電競圈、時尚圈、選秀節目、豪門財閥、職場商戰、醫院、律師事務所、新聞媒體、刑偵、賽車場、拍賣行、古董界、料理界、畫廊藝術圈、職業運動、航空公司、偏鄉小鎮、九零年代港風、八零年代',         // 最近一個主線的男主，用於支線與防重疊
@@ -139,6 +142,8 @@ function blankInstance() {
         identity_card: { name: '', age: '', social_role: '', family: '', restrictions: '', range: '', friction: '', snapshot: {} },
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
         glossary: [], concessions: [], threads: [],
+        pollution: 0, pollution_source: '', pollution_notes: [],
+        world_events: [], last_offscreen: 0, dossier_done: false,
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
         map: { regions: [] }, location: '',
@@ -285,6 +290,7 @@ function normCast(c) {
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         cover: '', unmasked: false, slips: [],
         aftermath: '', world_mark: '', mark_seen: false,
+        long_goal: '', short_goal: '', short_goal_act: 0, goal_conflict: '', enemies: [], inner_circle: [], anniversary: null, offscreen: [],
         last_seen_turn: 0,
     }, c);
 }
@@ -407,6 +413,27 @@ function applyTurn(o) {
     });
 
     const inv = S().inventory;
+    (o.offscreen || []).forEach(x => {
+        const c = inst.cast.find(y => y.codename === x.codename);
+        if (!c) return;
+        if (!Array.isArray(c.offscreen)) c.offscreen = [];
+        c.offscreen.push({ turn: inst.turn, progress: x.progress || '', effect: x.visible_effect || '' });
+        if (c.offscreen.length > 8) c.offscreen.shift();
+        if (x.visible_effect) { inst.world_events.push({ turn: inst.turn, text: x.visible_effect, seen: false }); }
+        inst.last_offscreen = inst.turn;
+    });
+    if ((o.offscreen || []).length) log.push('男主們在幕後有了動作');
+    (o.world_event_seen || []).forEach(txt => { const e = inst.world_events.find(w => w.text === txt); if (e) e.seen = true; });
+    if (o.world_event_seen?.length) log.push('她察覺到世界的變化');
+    if (typeof o.pollution_delta === 'number' && o.pollution_delta && pollutionActive(inst)) {
+        const d = Math.max(-15, Math.min(10, o.pollution_delta));
+        const before = pollutionStage(inst.pollution)[1];
+        inst.pollution = Math.max(0, Math.min(100, (Number(inst.pollution) || 0) + d));
+        if (o.pollution_source) inst.pollution_source = o.pollution_source;
+        if (o.pollution_note) { inst.pollution_notes.push(o.pollution_note); if (inst.pollution_notes.length > 12) inst.pollution_notes.shift(); }
+        const after = pollutionStage(inst.pollution)[1];
+        log.push(`汙染度 ${d > 0 ? '+' : ''}${d}${after !== before ? `（進入「${after}」）` : ''}`);
+    }
     if (typeof o.shards === 'number' && o.shards) { inv.shards = Math.max(0, (inv.shards || 0) + o.shards); log.push(`碎片 ${o.shards > 0 ? '+' : ''}${o.shards}`); }
     (o.item_add || []).forEach(it => {
         if (!it.name) return;
@@ -471,7 +498,7 @@ function endInstance(end) {
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
-        days_spent: inst.calendar?.day || 0, real_time: end.real_time || inst.real_time || '',
+        days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0, real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
     });
     if (inst.worldline) {
@@ -519,6 +546,25 @@ function fmtDays(n) {
     const m = Math.floor((n % 365) / 30);
     const d = (n % 365) % 30;
     return [y ? `${y} 年` : '', m ? `${m} 個月` : '', d ? `${d} 天` : ''].filter(Boolean).join(' ');
+}
+
+// ── 汙染度：B 級以上的精神汙染與共墮 ──
+const POLLUTION_STAGES = [
+    [0, '清醒', '她的判斷完全是自己的。'],
+    [20, '動搖', '她開始覺得他的某些做法其實有道理，偶爾替他想理由；事後會察覺自己剛才怪怪的。'],
+    [40, '侵蝕', '她會替他找藉口、害怕離開他、對外界的警告產生反感。現實的錨點（手環、無語、她本人的習慣）開始變得模糊，但還抓得住。'],
+    [60, '依存', '她的想法越來越像他希望的樣子，離開他會焦慮、空虛。她仍能抵抗，但每次抵抗都很吃力，代價明顯。'],
+    [80, '共墮邊緣', '她站在墮落的邊緣：再往前一步，她會選擇與他一起沉下去。這一步必須由玩家的選擇決定，不得替她跨出。'],
+];
+
+function pollutionStage(v) {
+    let st = POLLUTION_STAGES[0];
+    for (const x of POLLUTION_STAGES) if ((Number(v) || 0) >= x[0]) st = x;
+    return st;
+}
+
+function pollutionActive(inst) {
+    return ['B', 'A', 'S'].includes(diffLetter(inst?.difficulty));
 }
 
 // 最近一個主線出場的男主（下一個主線不得重疊）
@@ -734,12 +780,36 @@ function buildStateText() {
             }
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
             if (c.aftermath) t += `  【封存】她消失後他做的事：${c.aftermath}\n`;
+            if (c.long_goal || c.short_goal) {
+                t += `  【封存】長期目標：${c.long_goal || '未定'}｜本幕短期目標：${c.short_goal || '未定'}${(c.short_goal_act || 0) < (inst.current_act || 1) ? '（⚠ 已進入新的一幕，請以 cast_update 更新 short_goal）' : ''}`;
+                if (c.goal_conflict) t += `｜與她任務的衝突：${c.goal_conflict}`;
+                t += '\n';
+            }
+            if (c.enemies?.length) t += `  【封存】仇人／對手：${c.enemies.map(e => `${e.name}（${e.reason || ''}${e.status ? '，' + e.status : ''}）`).join('；')}\n`;
+            if (c.inner_circle?.length) t += `  身邊的人：${c.inner_circle.map(p => `${p.name}｜${p.relation}｜對她：${p.attitude_to_her}`).join('；')}（他們與他的關係在她眼中${c.cover && !c.unmasked ? '尚未揭露' : '可見'}）\n`;
+            if (c.anniversary?.label) t += `  【封存】他的紀念日：副本第 ${c.anniversary.day} 天｜${c.anniversary.label}\n`;
+            if (c.offscreen?.length) t += `  【封存】最近的幕後行動：${c.offscreen.slice(-2).map(x => x.progress).join('；')}\n`;
             if (c.world_mark) t += `  這件事留在世界上的痕跡（居民可見，傳聞中不得點名是他）：${c.world_mark}${c.mark_seen ? '｜她已聽聞' : (inst.current_act <= 1 ? '｜⚠ 她還沒聽聞：第一幕內以居民、傳聞、小道消息或親眼所見呈現' : '｜⚠ 她還沒聽聞：盡快呈現')}\n`;
             if (c.this_life) t += `  【封存】此世性格（言行依據）：${c.this_life}\n`;
             t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
             if (c.role === '主要' && gap >= 5) t += `｜已 ${gap} 回合未出場：待目前場景結束後，以隱藏存在或新場景介入`;
             t += '\n';
         });
+    }
+
+    const pendingEvents = (inst.world_events || []).filter(e => !e.seen).slice(-4);
+    if (pendingEvents.length) t += `\n【世界正在發生的變化】（男主幕後行動造成，居民可見；她還沒察覺。適合時透過傳聞、街景、新聞讓她碰到，以 world_event_seen 回報原文）\n${pendingEvents.map(e => '- ' + e.text).join('\n')}\n`;
+    const every = Math.max(3, Number(S().offscreenEvery) || 6);
+    if (inst.cast.some(c => c.long_goal) && inst.turn - (inst.last_offscreen || 0) >= every) {
+        t += `\n【幕後行動】已經 ${inst.turn - (inst.last_offscreen || 0)} 回合沒有回報男主的幕後進展。本回合請以 offscreen 回報每位主要男主在她看不到的地方推進了什麼。\n`;
+    }
+
+    if (pollutionActive(inst)) {
+        const st = pollutionStage(inst.pollution);
+        t += `\n【汙染度】${inst.pollution || 0}/100｜階段：${st[1]}${inst.pollution_source ? `｜主要來源：${inst.pollution_source}` : ''}\n`;
+        t += `這個階段的她：${st[2]}\n`;
+        if (inst.pollution_notes?.length) t += `近期的汙染表現：${inst.pollution_notes.slice(-3).join('；')}\n`;
+        t += '依〈黑化〉的精神汙染規則書寫：汙染要被呈現為汙染，讓玩家看得出她被影響；她抵抗時汙染下降。以 pollution_delta 回報變化。\n';
     }
 
     if (inst.concessions.length) {
@@ -864,7 +934,10 @@ function onMessageReceived(mesId) {
     text = open.cleaned;
     for (const raw of open.found) {
         const obj = parseJsonLoose(raw);
-        if (obj) logs.push(applyOpen(obj));
+        if (obj) {
+            logs.push(applyOpen(obj));
+            if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
+        }
         else toast('開局標籤解析失敗，請檢查 JSON 格式（原文已保存在訊息資料中）', 'warning');
     }
 
@@ -1074,6 +1147,7 @@ ${msg.mes || ''}`);
         const obj = parseJsonLoose(found[0] ?? raw);
         if (!obj || typeof obj !== 'object') throw new Error('AI 回傳的不是完整的 JSON（可能又被截斷了）');
         const r = applyOpen(obj);
+        if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
         msg.extra = msg.extra || {};
         msg.extra.nova_inf_raw = (msg.extra.nova_inf_raw ? msg.extra.nova_inf_raw + '\n' : '') + `<inf_open>${JSON.stringify(obj)}</inf_open>`;
         delete msg.extra.nova_inf_partial;
@@ -1083,6 +1157,74 @@ ${msg.mes || ''}`);
     } catch (e) {
         console.warn('[Nova無限流] 補抓開局失敗', e);
         toast('補抓失敗：' + (e.message || e), 'error');
+    }
+}
+
+// ── 男主人生檔案：開局後在背景生成，不佔開局回覆的長度 ──
+function applyDossier(arr) {
+    const inst = C()?.instance;
+    if (!inst || !Array.isArray(arr)) return 0;
+    let n = 0;
+    for (const d of arr) {
+        const c = inst.cast.find(x => x.codename === d.codename);
+        if (!c) continue;
+        for (const k of ['long_goal', 'short_goal', 'goal_conflict']) if (d[k]) c[k] = d[k];
+        if (Array.isArray(d.enemies)) c.enemies = d.enemies;
+        if (Array.isArray(d.inner_circle)) c.inner_circle = d.inner_circle;
+        if (d.short_goal) c.short_goal_act = inst.current_act || 1;
+        if (d.anniversary?.label) {
+            c.anniversary = d.anniversary;
+            const id = 'ann_' + c.codename;
+            if (!inst.calendar.events.find(e => e.id === id)) {
+                inst.calendar.events.push(normEvent({ id, day: Number(d.anniversary.day) || 1, title: `${c.codename}：${d.anniversary.label}`, sealed: true }, inst.calendar.events.length));
+            }
+        }
+        n++;
+    }
+    if (n) inst.dossier_done = true;
+    return n;
+}
+
+const DOSSIER_SPEC = `<inf_dossier>
+[
+  {
+    "codename": "代號（與卡司一致）",
+    "long_goal": "他在這個副本中的長期目標，整個副本不變。可以與她的主線任務衝突",
+    "short_goal": "他在第一幕正在忙的事，具體、有期限感",
+    "goal_conflict": "他的目標與她的主線任務哪裡衝突或交會（沒有就留空）",
+    "enemies": [{"name": "仇人或對手（NPC、勢力，或其他男主的代號）", "reason": "結怨的原因", "status": "目前的狀態：明爭、暗鬥、休戰、單方面追殺"}],
+    "inner_circle": [{"name": "心腹、下屬、家人、師父、寵物等", "relation": "與他的關係", "attitude_to_her": "這個人會怎麼對待她（依他的心意而定，但這個人不知道原因）"}],
+    "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"}
+  }
+]
+</inf_dossier>`;
+
+async function genDossiers(manual = false) {
+    const cs = C();
+    const inst = cs?.instance;
+    if (!inst || !inst.cast.length) { if (manual) toast('目前沒有男主資料', 'warning'); return; }
+    const prevMode = cs.mode;
+    cs.mode = 'instance';
+    const system = sub(buildRulesText() + '\n\n' + buildStateText());
+    cs.mode = prevMode;
+    const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。
+- 目標與仇人要扎根在這個世界的勢力與他的權勢上，並與他在她消失後做的事一致。
+- 男主之間可以互為仇人或對手。
+- 身邊的人是具體的人物，有名字。
+只輸出下列格式，不要輸出任何其他文字：
+${DOSSIER_SPEC}`);
+    if (manual) toast('正在生成男主人生檔案…', 'info');
+    try {
+        const raw = await genRaw(system, prompt, 8192);
+        const found = extractTags(String(raw || ''), 'inf_dossier').found;
+        const arr = parseJsonLoose(found[0] ?? raw);
+        const n = applyDossier(arr);
+        if (!n) throw new Error('沒有對上任何男主的代號');
+        commit();
+        toast(`已建立 ${n} 位男主的人生檔案（封存）`, 'success');
+    } catch (e) {
+        console.warn('[Nova無限流] 人生檔案生成失敗', e);
+        toast('人生檔案生成失敗：' + (e.message || e) + '。可以到人物分頁按「生成人生檔案」重試。', 'warning');
     }
 }
 
@@ -1672,6 +1814,14 @@ function renderOverview() {
             <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${inst.time_limit_days ? `｜時限 ${fmtDays(inst.time_limit_days)}，剩餘 ${remain < 0 ? '<span class="nova-inf-warn">已超時</span>' : fmtDays(remain)}` : ''}${inst.real_time ? `｜現實約 ${esc(inst.real_time)}` : ''}</p>
             <p>本幕問題：${esc(inst.acts.find(a => a.number === inst.current_act)?.question || '—')}</p>`,
             btn('edit_basic', '編輯'));
+        if (pollutionActive(inst)) {
+            const st = pollutionStage(inst.pollution);
+            h += card('🩸 汙染度', `
+                <div class="nova-inf-bar nova-inf-pollution"><div style="width:${inst.pollution || 0}%"></div></div>
+                <p><b>${inst.pollution || 0}</b>/100｜${st[1]}${inst.pollution_source ? `｜來源：${esc(inst.pollution_source)}` : ''}</p>
+                <p class="nova-inf-hint">${esc(st[2])}</p>
+                ${inst.pollution_notes?.length ? `<details class="nova-inf-more"><summary>最近的變化</summary><ul class="nova-inf-ol">${inst.pollution_notes.slice().reverse().map(n => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}`);
+        }
         h += card('獨處鎖', `
             <p class="nova-inf-hint">和某位男主單獨相處、正在兌現條件時打開，這段期間不會有人闖進來打斷。場景結束記得關掉。</p>
             ${btn('lock', cs.lock ? '🔓 關閉獨處鎖（目前開啟中）' : '🔒 開啟獨處鎖', cs.lock ? 'data-on="1"' : '', cs.lock ? '' : 'primary')}`);
@@ -1681,6 +1831,7 @@ function renderOverview() {
                 ${btn('prog_plus', '進度 +5%')}
                 ${btn('act_next', '進入下一幕')}
                 ${btn('end_manual', '手動結束副本')}
+                ${pollutionActive(inst) ? btn('pol_plus', '汙染 +5') + btn('pol_minus', '汙染 −5') : ''}
             </div></details>`;
         h += `<div class="nova-inf-danger-zone">
             <b>危險操作</b>
@@ -1769,6 +1920,22 @@ function renderPeople() {
         h += card('這個世界的傳聞', (marks.length ? marks.map(c => `<div class="nova-inf-item">${esc(c.world_mark)}</div>`).join('') : '<p class="nova-inf-empty">還沒聽說什麼。</p>') +
             '<p class="nova-inf-hint">你聽說過的、讓人不安的事。不會標出跟誰有關。</p>');
     }
+    const seenEv = (inst.world_events || []).filter(e => e.seen);
+    if ((inst.world_events || []).length) {
+        h += card('世界的變化', (seenEv.length ? seenEv.slice().reverse().map(e => `<div class="nova-inf-item">${esc(e.text)}</div>`).join('') : '<p class="nova-inf-empty">還沒察覺到什麼變化。</p>') +
+            '<p class="nova-inf-hint">你注意到的、世界正在改變的地方。不會標出是誰造成的。</p>');
+    }
+    h += card('男主的人生檔案', `
+        <p class="nova-inf-hint">目標、仇人、身邊的人、紀念日，開局後在背景自動生成，全部封存。</p>
+        ${peek ? inst.cast.map(c => `<div class="nova-inf-item"><b>${esc(c.codename)}</b>
+            <div class="nova-inf-sub">長期：${esc(c.long_goal || '—')}｜本幕：${esc(c.short_goal || '—')}</div>
+            ${c.goal_conflict ? `<div class="nova-inf-sub">與你的衝突：${esc(c.goal_conflict)}</div>` : ''}
+            ${c.enemies?.length ? `<div class="nova-inf-sub">仇人：${c.enemies.map(e => esc(e.name)).join('、')}</div>` : ''}
+            ${c.inner_circle?.length ? `<div class="nova-inf-sub">身邊的人：${c.inner_circle.map(p => esc(p.name + '（' + p.relation + '）')).join('、')}</div>` : ''}
+            ${c.anniversary?.label ? `<div class="nova-inf-sub">紀念日：第 ${esc(c.anniversary.day)} 天｜${esc(c.anniversary.label)}</div>` : ''}
+            ${c.offscreen?.length ? `<div class="nova-inf-sub">幕後：${esc(c.offscreen[c.offscreen.length - 1].progress)}</div>` : ''}
+        </div>`).join('') : `<p>${inst.dossier_done ? '已建立 🔒' : '尚未建立'}</p>`}`,
+        btn('gen_dossier', inst.dossier_done ? '重新生成' : '生成人生檔案'));
     h += card('人物', inst.people.map((p, i) => `
         <div class="nova-inf-item">
             <div><b>${esc(p.name)}</b>｜${esc(p.identity)}｜${esc(p.faction)}｜${esc(p.status)}</div>
@@ -2012,6 +2179,9 @@ function renderSettingsTab() {
                 <option value="new" ${s.continueMode === 'new' ? 'selected' : ''}>開新聊天</option>
             </select></label>
         <label class="nova-inf-label"><input type="checkbox" data-set="hideOld" ${s.hideOld ? 'checked' : ''}> 結算後前往下一步時，隱藏前面的訊息（AI 看不到，畫面上還在）</label>`) +
+        card('男主人生檔案', `
+        <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（目標、仇人、身邊的人、紀念日）</label>
+        <label class="nova-inf-label">每幾回合請 AI 回報男主的幕後行動<input class="nova-inf-input" type="number" min="3" data-set="offscreenEvery" value="${s.offscreenEvery || 6}"></label>`) +
         card('插件設定', `
         <label class="nova-inf-label"><input type="checkbox" data-set="enabled" ${s.enabled ? 'checked' : ''}> 啟用插件</label>
         <label class="nova-inf-label">規則放置位置
@@ -2218,6 +2388,9 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'gen_dossier': if (!inst?.dossier_done || confirm('重新生成會覆蓋目前的人生檔案，確定嗎？')) genDossiers(true); break;
+        case 'pol_plus': if (inst) { inst.pollution = Math.min(100, (inst.pollution || 0) + 5); commit(); } break;
+        case 'pol_minus': if (inst) { inst.pollution = Math.max(0, (inst.pollution || 0) - 5); commit(); } break;
         case 'recover_open': recoverOpen(); break;
         case 'pool_add_modern': {
             const have = new Set(poolList());
