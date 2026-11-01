@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.7.2
+// Nova 無限流面板 v0.7.3
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -77,6 +77,8 @@ function defaultSettings() {
         deletedRuleIds: [],
         pendingSeed: null,
         playerProfile: '',
+        floatBall: true,
+        floatPos: null,
         phone: { contacts: [], cost: 1, history_limit: 30 },
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
     };
@@ -698,6 +700,7 @@ function buildRulesText() {
 }
 
 function updateInjection() {
+    try { syncBall(); } catch (e) { /* 忽略 */ }
     const c = ctx();
     const s = S();
     const cs = C();
@@ -1271,6 +1274,7 @@ function togglePanel() {
     ensurePanel();
     document.getElementById('nova_inf_panel').classList.toggle('nova-inf-hidden');
     renderPanel();
+    syncBall();
 }
 
 function sealedVal(v) {
@@ -1749,6 +1753,10 @@ function renderSettingsTab() {
         <select class="nova-inf-input" data-bind="mode">
             ${Object.entries(MODES).map(([k, v]) => `<option value="${k}" ${cs?.mode === k ? 'selected' : ''}>${v}</option>`).join('')}
         </select>`) +
+        card('浮球', `
+        <label class="nova-inf-label"><input type="checkbox" data-set="floatBall" ${s.floatBall !== false ? 'checked' : ''}> 顯示浮球</label>
+        <p class="nova-inf-hint">點一下打開或關閉面板，按住可以拖到任何位置。關掉浮球後，仍可從魔杖選單打開。</p>
+        <div class="nova-inf-row">${btn('ball_reset', '浮球回到預設位置')}</div>`) +
         card('插件設定', `
         <label class="nova-inf-label"><input type="checkbox" data-set="enabled" ${s.enabled ? 'checked' : ''}> 啟用插件</label>
         <label class="nova-inf-label">規則放置位置
@@ -1838,6 +1846,7 @@ function onBodyClick(ev) {
         case 'goto_overview': currentTab = 'overview'; renderPanel(); break;
         case 'guide_dismiss': s.seenGuide = true; saveSettings(); renderPanel(); break;
         case 'noop': break;
+        case 'ball_reset': s.floatPos = null; saveSettings(); placeBall(); toast('浮球已回到右側', 'success'); break;
         case 'pick': { const r = pickOption(Number(b.dataset.i)); if (r) toast(r, 'success'); renderPanel(); break; }
         case 'options_clear': cs.options = []; commit(); break;
         case 'pending_cancel': s.pendingSeed = null; saveSettings(); renderPanel(); break;
@@ -2145,6 +2154,84 @@ function onBodyChange(ev) {
     }
 }
 
+// ───────────────────────── 浮球 ─────────────────────────
+// 可拖曳；點一下開關面板；位置記在全域設定
+
+const BALL_SIZE = 46;
+
+function clampBall(x, y) {
+    const w = window.innerWidth, h = window.innerHeight;
+    return {
+        x: Math.min(Math.max(4, x), Math.max(4, w - BALL_SIZE - 4)),
+        y: Math.min(Math.max(4, y), Math.max(4, h - BALL_SIZE - 4)),
+    };
+}
+
+function placeBall() {
+    const ball = document.getElementById('nova_inf_ball');
+    if (!ball) return;
+    const s = S();
+    const pos = s.floatPos || { x: window.innerWidth - BALL_SIZE - 16, y: Math.round(window.innerHeight * 0.55) };
+    const p = clampBall(pos.x, pos.y);
+    ball.style.left = p.x + 'px';
+    ball.style.top = p.y + 'px';
+}
+
+function ensureBall() {
+    if (document.getElementById('nova_inf_ball')) return;
+    const ball = document.createElement('div');
+    ball.id = 'nova_inf_ball';
+    ball.title = '無限流面板（可拖曳）';
+    ball.innerHTML = '<span class="nova-ball-icon">∞</span>';
+    document.body.appendChild(ball);
+
+    let start = null, moved = false;
+    ball.addEventListener('pointerdown', e => {
+        if (e.button !== undefined && e.button !== 0) return;
+        start = { px: e.clientX, py: e.clientY, x: parseFloat(ball.style.left) || 0, y: parseFloat(ball.style.top) || 0 };
+        moved = false;
+        try { ball.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    });
+    ball.addEventListener('pointermove', e => {
+        if (!start) return;
+        const dx = e.clientX - start.px, dy = e.clientY - start.py;
+        if (!moved && Math.hypot(dx, dy) < 6) return;
+        moved = true;
+        ball.classList.add('dragging');
+        const p = clampBall(start.x + dx, start.y + dy);
+        ball.style.left = p.x + 'px';
+        ball.style.top = p.y + 'px';
+    });
+    const end = () => {
+        if (!start) return;
+        if (moved) {
+            S().floatPos = { x: Math.round(parseFloat(ball.style.left) || 0), y: Math.round(parseFloat(ball.style.top) || 0) };
+            saveSettings();
+        } else {
+            togglePanel();
+        }
+        start = null;
+        ball.classList.remove('dragging');
+    };
+    ball.addEventListener('pointerup', end);
+    ball.addEventListener('pointercancel', () => { start = null; ball.classList.remove('dragging'); });
+    window.addEventListener('resize', placeBall);
+    placeBall();
+    syncBall();
+}
+
+function syncBall() {
+    const ball = document.getElementById('nova_inf_ball');
+    if (!ball) return;
+    const s = S();
+    const cs = C();
+    ball.classList.toggle('nova-inf-hidden', s.floatBall === false);
+    ball.classList.toggle('off', !cs || cs.mode === 'off' || !s.enabled);
+    const open = !document.getElementById('nova_inf_panel')?.classList.contains('nova-inf-hidden');
+    ball.classList.toggle('open', !!open);
+    ball.querySelector('.nova-ball-icon').textContent = open ? '✕' : '∞';
+}
+
 // ───────────────────────── 入口 ─────────────────────────
 
 function addMenuButton() {
@@ -2170,11 +2257,15 @@ function addMenuButton() {
                 </div>
                 <div class="inline-drawer-content">
                     <button class="menu_button" id="nova_inf_open_btn">打開無限流面板</button>
-                    <p class="nova-inf-hint">也可以從輸入框左邊的魔杖選單打開。</p>
+                    <button class="menu_button" id="nova_inf_ball_btn">顯示／隱藏浮球</button>
+                    <p class="nova-inf-hint">也可以點畫面上的 ∞ 浮球，或從輸入框左邊的魔杖選單打開。</p>
                 </div>
             </div>`;
         settings.appendChild(box);
         document.getElementById('nova_inf_open_btn').addEventListener('click', togglePanel);
+        document.getElementById('nova_inf_ball_btn').addEventListener('click', () => {
+            const st = S(); st.floatBall = st.floatBall === false; saveSettings(); ensureBall(); placeBall(); syncBall();
+        });
     }
 }
 
@@ -2192,6 +2283,7 @@ jQuery(async () => {
     await loadOptionalApis();
     addMenuButton();
     ensurePanel();
+    ensureBall();
 
     const c = ctx();
     const ev = c.eventSource;

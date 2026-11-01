@@ -399,3 +399,32 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 .nova-phone-input textarea { flex: 1; resize: none; margin: 0; }
 .nova-phone-input .nova-inf-btn { white-space: nowrap; }
 .nova-inf-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* ───── v0.7.3 浮球 ───── */
+#nova_inf_ball {
+    position: fixed;
+    z-index: 3002;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    background: var(--SmartThemeQuoteColor, #8ab4f8);
+    color: #111;
+    font-size: 22px;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    opacity: 0.85;
+    transition: opacity 0.2s, transform 0.15s, filter 0.2s;
+}
+#nova_inf_ball:hover { opacity: 1; }
+#nova_inf_ball.dragging { opacity: 1; transform: scale(1.1); transition: none; }
+#nova_inf_ball.off { filter: grayscale(1); opacity: 0.55; }
+#nova_inf_ball.open { opacity: 1; font-size: 18px; }
+#nova_inf_ball.nova-inf-hidden { display: none; }
+#nova_inf_settings .menu_button + .menu_button { margin-top: 6px; }
