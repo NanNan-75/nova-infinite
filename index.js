@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.8.1
+// Nova 無限流面板 v0.8.3
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -80,7 +80,10 @@ function defaultSettings() {
         floatBall: true,
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
-        lastMain: null,         // 最近一個主線的男主，用於支線與防重疊
+        lastMain: null,
+        rollWorlds: true,       // 白域大廳由插件抽世界線
+        rollCount: 3,
+        worldPool: '歐洲宮廷、東亞古代王朝、東方仙俠、志怪、武俠江湖、民國租界、西部荒野、都市怪談、校園、修道院、希臘神話、北歐神話、埃及神話、凱爾特神話、東方神話、童話、民間傳說、異界旅館、書中世界、夢境、馬戲團、巡迴劇團、遊樂園、蒸汽龐克、深海、極地、沙漠、雨林、群島航海、後末日廢土、未來都市、賽博龐克、太空站、星際殖民地、海上浮城、空中城市、地下城市、維多利亞倫敦、文藝復興水都、大航海時代、遊牧草原、絲路商隊、現代都市、豪華郵輪、長途列車、電影片場、博物館、百貨公司、賭城、古代競技場、魔法學院、獸人國度、精靈森林、龍族領地、機械人城市、平行現代、娛樂圈、電競圈、時尚圈、選秀節目、豪門財閥、職場商戰、醫院、律師事務所、新聞媒體、刑偵、賽車場、拍賣行、古董界、料理界、畫廊藝術圈、職業運動、航空公司、偏鄉小鎮、九零年代港風、八零年代',         // 最近一個主線的男主，用於支線與防重疊
         floatPos: null,
         phone: { contacts: [], cost: 1, history_limit: 30 },
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
@@ -537,6 +540,35 @@ function sideText(src) {
     return t;
 }
 
+// ── 世界線抽籤：AI 自己挑會一直回到鐘樓、溫室、旅館，改由插件隨機決定 ──
+function poolList() {
+    return String(S().worldPool || '').split(/[,，、\n]/).map(x => x.trim()).filter(Boolean);
+}
+
+function rollWorlds(n = 3) {
+    const s = S();
+    const recent = s.ledger.slice(-3).map(l => String(l.axes?.world || ''));
+    let pool = poolList().filter(w => !recent.some(r => r && (r.includes(w) || w.includes(r))));
+    if (pool.length < n) pool = poolList();
+    const out = [];
+    while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    return out;
+}
+
+function ensureRolled() {
+    const s = S();
+    const cs = C();
+    if (!cs || cs.mode !== 'lobby' || !s.rollWorlds || cs.options?.length) return;
+    const n = Math.min(8, Math.max(1, Number(s.rollCount) || 3));
+    if (!Array.isArray(cs.rolled) || cs.rolled.length !== n) cs.rolled = rollWorlds(n);
+}
+
+function rolledText() {
+    const cs = C();
+    if (!S().rollWorlds || !cs?.rolled?.length || cs.options?.length) return '';
+    return `\n【本批選項的世界線｜插件抽籤，必須依序使用；選項數量等於抽到的數量】\n${cs.rolled.map((w, i) => `${i + 1}. ${w}`).join('\n')}\n每個選項的主世界線必須是抽到的那一個，可以混搭一個次要元素，但不得換掉主世界線，也不得全部回到同一種場所（鐘樓、溫室、旅館、圖書館、劇院）。\n`;
+}
+
 function line(label, value) {
     return value ? `${label}：${value}\n` : '';
 }
@@ -576,6 +608,8 @@ function buildStateText() {
         if (s.glossary_global.length) t += '白域通用詞彙：\n' + s.glossary_global.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
         t += '最近三個副本（防重複對照）：\n' + recentText();
         t += worldlineSealedText();
+        ensureRolled();
+        t += rolledText();
         if (cs.next?.kind === 'side') {
             t += '\n【本次只提供支線選項】玩家選擇先進入上一個主線男主的過去。提供 2–3 個支線選項，line_type 一律填「支線」。\n' + sideText(cs.next);
         } else {
@@ -814,7 +848,7 @@ function onMessageReceived(mesId) {
     text = opts.cleaned;
     for (const raw of opts.found) {
         const arr = parseJsonLoose(raw);
-        if (Array.isArray(arr) && arr.length) { cs.options = arr; logs.push(`收到 ${arr.length} 個副本選項`); }
+        if (Array.isArray(arr) && arr.length) { cs.options = arr; cs.rolled = []; logs.push(`收到 ${arr.length} 個副本選項`); }
         else toast('副本選項標籤解析失敗', 'warning');
     }
     const pick = extractTags(text, 'inf_pick');
@@ -978,6 +1012,7 @@ async function goNext(next) {
     cs.next = next;
     cs.instance = null;
     cs.options = [];
+    cs.rolled = [];
     cs.lock = false;
     cs.mode = 'lobby';
     commit();
@@ -1487,6 +1522,13 @@ function renderOverview() {
             if (cs.next?.kind === 'side') h += `<div class="nova-inf-row">${btn('next_cancel_side', '改成前往下一個主線')}</div>`;
         }
         h += card('白域狀態', `<p>碎片 <b>${s.inventory.shards || 0}</b>　已通關 <b>${s.ledger.length}</b></p>`);
+        if (s.rollWorlds && !cs.options?.length) {
+            ensureRolled();
+            h += card('🎲 這一批的世界線', `
+                <p>${(cs.rolled || []).map(w => `<span class="nova-inf-chip">${esc(w)}</span>`).join('　')}</p>
+                <p class="nova-inf-hint">插件抽好了，無語會照這幾個世界線出選項。不喜歡就重抽；數量和抽籤池可以在設定裡改。</p>`,
+                btn('reroll_worlds', '🎲 重抽'));
+        }
         if (cs.options?.length) {
             h += card('副本選項', cs.options.map((o, i) => `
                 <div class="nova-inf-item">
@@ -1887,6 +1929,12 @@ function renderSettingsTab() {
             </select></label>
         <label class="nova-inf-label">規則深度（選「聊天中」時有效）<input class="nova-inf-input" type="number" data-set="rulesDepth" value="${s.rulesDepth}"></label>
         <label class="nova-inf-label">狀態深度（建議 1）<input class="nova-inf-input" type="number" data-set="stateDepth" value="${s.stateDepth}"></label>`) +
+        card('世界線抽籤', `
+        <label class="nova-inf-label"><input type="checkbox" data-set="rollWorlds" ${s.rollWorlds ? 'checked' : ''}> 白域大廳由插件隨機抽世界線（避免 AI 一直選同類型）</label>
+        <label class="nova-inf-label">一批抽幾個（等於副本選項數量，1–8）<input class="nova-inf-input" type="number" min="1" max="8" data-set="rollCount" value="${s.rollCount || 3}"></label>
+        <div class="nova-inf-row">${btn('pool_add_modern', '＋ 加入近現代題材包')}</div>
+        <label class="nova-inf-label">抽籤池（用頓號、逗號或換行分隔；最近三個副本用過的會自動跳過）
+            <textarea class="nova-inf-input" rows="6" data-set="worldPool">${esc(s.worldPool || '')}</textarea></label>`) +
         card('禁用素材清單', `
         <p class="nova-inf-hint">AI 的開局資料或正文出現這些詞時，會跳出警告提醒你重新生成（不會自動修改）。用逗號或換行分隔。另外，未揭露身分的男主真名出現在正文時也會警告。</p>
         <textarea class="nova-inf-input" rows="5" data-set="bannedWords">${esc(s.bannedWords || '')}</textarea>`) +
@@ -2078,6 +2126,15 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'pool_add_modern': {
+            const have = new Set(poolList());
+            const add = '娛樂圈、電競圈、時尚圈、選秀節目、豪門財閥、職場商戰、醫院、律師事務所、新聞媒體、刑偵、賽車場、拍賣行、古董界、料理界、畫廊藝術圈、職業運動、航空公司、偏鄉小鎮、九零年代港風、八零年代'.split('、').filter(w => !have.has(w));
+            s.worldPool = [...poolList(), ...add].join('、');
+            saveSettings(); renderPanel();
+            toast(add.length ? `加入了 ${add.length} 個近現代題材` : '抽籤池裡已經都有了', 'success');
+            break;
+        }
+        case 'reroll_worlds': cs.rolled = rollWorlds(Math.min(8, Math.max(1, Number(s.rollCount) || 3))); commit(); break;
         case 'next_cancel_side': cs.next = { kind: 'main' }; cs.options = []; commit(); break;
         case 'lock': cs.lock = !cs.lock; commit(); break;
         case 'day_plus': if (inst) { inst.calendar.day = (inst.calendar.day || 1) + 1; commit(); } break;
