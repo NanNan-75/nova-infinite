@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.12.0
+// Nova 無限流面板 v0.12.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -249,7 +249,7 @@ function applyOpen(obj) {
         sealed: Object.assign(inst.sealed, obj.sealed || {}),
     });
     inst.acts = (obj.acts || []).map((a, i) => ({
-        number: a.number ?? i + 1, question: a.question || '', truth: a.truth || '',
+        number: a.number ?? i + 1, question: a.question || '', truth: a.truth || '', day_end: Number(a.day_end) || 0, milestone: a.milestone || '',
         twist: a.twist || '', emotion_focus: a.emotion_focus || '', done: false,
     }));
     inst.clues = (obj.clues || []).map((c, i) => normClue(c, i));
@@ -784,7 +784,18 @@ function buildStateText() {
     const act = inst.acts.find(a => a.number === inst.current_act);
     if (act) {
         t += `- 當前第 ${act.number} 幕問題：${act.question}\n`;
+        const day = inst.calendar?.day || 1;
+        const prevEnd = inst.acts.filter(a => a.number < act.number).reduce((m, a) => Math.max(m, a.day_end || 0), 0);
+        if (act.day_end) {
+            t += `  本幕時間範圍：副本第 ${prevEnd + 1}–${act.day_end} 天（目前第 ${day} 天）${act.milestone ? `｜本幕結束時的里程碑：${act.milestone}` : ''}\n`;
+            if (day > act.day_end && inst.act_progress < 100) t += `  ⚠ 已超過本幕預定時間 ${fmtDays(day - act.day_end)}：讓本幕的事件盡快收束，或以世界的變數說明延誤。\n`;
+            if (inst.act_progress >= 100 && day < act.day_end - 14) t += `  ⚠ 本幕的事件比預定提早完成：以時間跳躍推進到下一幕的時間點（約第 ${act.day_end} 天），並呈現這段期間她的生活與世界的變化。\n`;
+        }
         t += `  【封存】本幕真相：${act.truth}｜解開後揭露：${act.twist}｜情感重點：${act.emotion_focus}\n`;
+    }
+    const lastAct = inst.acts[inst.acts.length - 1];
+    if (inst.time_limit_days && lastAct?.day_end && lastAct.day_end < inst.time_limit_days * 0.8) {
+        t += `  ⚠ 各幕排定的時間（到第 ${lastAct.day_end} 天）遠短於時限（${fmtDays(inst.time_limit_days)}）：主線的最終事件應落在時限附近，請在後續幕次擴大任務的規模與時間跨度。\n`;
     }
     t += '（尚未到達的幕不在此列，不得提前揭露或暗示。）\n';
 
