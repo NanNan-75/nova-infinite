@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.9.3
+// Nova 無限流面板 v0.9.4
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -499,6 +499,7 @@ function endInstance(end) {
         s.lastMain = {
             instance_id: inst.id, name: inst.name, worldline: inst.worldline,
             world: inst.axes?.world || '', era: clone(inst.era), world_change: clone(inst.world_change || {}),
+            mechanic: inst.axes?.mechanic || '', hook: inst.hook || '', residue: end.residue || '',
             regions: (inst.map?.regions || []).map(r => r.name).filter(Boolean),
             cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark })),
         };
@@ -544,6 +545,9 @@ function sideText(src) {
     if (wc.what) t += `主線中的現狀（支線要埋下通往這裡的種子，不得提前發生）：${wc.what}\n`;
     if (wc.cause) t += `崩壞的真正起因：${wc.cause}\n`;
     if (lm.regions?.length) t += `主線中出現過的地區：${lm.regions.join('、')}\n`;
+    if (lm.mechanic) t += `主線中折磨她的世界規則／機制：${lm.mechanic}\n`;
+    if (lm.residue) t += `她身上還帶著主線留下的殘留：${lm.residue}。支線中這個殘留會自然出現（她自己停不下來、改不掉），男主會注意到並記住。\n`;
+    t += '因果閉環：支線中她無意間帶來的習慣、說過的話、做過的事，可以成為主線中那些規則、傳說與世界傷痕的起源。主動尋找這種連結，但不得向她點破。\n';
     t += src.target ? `支線對象：${src.target}\n` : '支線對象：由你從下列男主中選一位\n';
     (lm.cast || []).forEach(c => {
         t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
@@ -1691,7 +1695,7 @@ function renderOverview() {
             '想許現實願望的話，到「背包」分頁按「＋ 許願」記下來。',
             '在下方選擇下一步，可以直接在這個聊天繼續。',
         ]);
-        if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>`);
+        if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>${s.lastMain?.instance_id === inst.id && s.lastMain.residue ? `<p class="nova-inf-sub">留在你身上的殘留：${esc(s.lastMain.residue)}</p>` : ''}`);
         const lm = s.lastMain;
         const sideBtns = (lm?.cast || []).map(c =>
             btn('next_side', `看「${esc(c.revealed || peek ? (c.real_name || c.codename) : c.codename)}」的過去`, `data-c="${esc(c.codename)}"`)).join('');

@@ -476,7 +476,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
   "item_add": [{"name": "", "description": "", "carry_rule": "僅限本副本/可帶回白域/可帶回現實"}],
   "item_remove": ["道具名"],
   "mechanic_revealed": false,
-  "instance_end": {"result": "完美通關/部分通關/苦澀通關/失敗/壞結局", "exit_type": "正常召回/突然消失/未告別/強制召回", "reward_tier": "", "upgrade": "例：C→A 或 不升級", "open_condition": "升級副本的開啟條件", "anomaly": false, "cast_fate": [{"codename": "代號", "alive": true, "good_ending": true, "personality": "他在這個世界被塑造出的性格與說話方式", "calls_her": "他怎麼稱呼她", "story": "你們在這個副本裡的關係歷程（三到五句）", "state": "她離開時他的處境", "last_moment": "你們最後的相處", "device": "他那一側用來收她訊息的東西，配合他的時代與世界"}]}
+  "instance_end": {"result": "完美通關/部分通關/苦澀通關/失敗/壞結局", "exit_type": "正常召回/突然消失/未告別/強制召回", "reward_tier": "", "upgrade": "例：C→A 或 不升級", "open_condition": "升級副本的開啟條件", "anomaly": false, "residue": "主線限定：副本留在她身上、回到現實也甩不掉的殘留（肢體習慣、反射動作、口頭禪、感官錯覺），一兩句", "cast_fate": [{"codename": "代號", "alive": true, "good_ending": true, "personality": "他在這個世界被塑造出的性格與說話方式", "calls_her": "他怎麼稱呼她", "story": "你們在這個副本裡的關係歷程（三到五句）", "state": "她離開時他的處境", "last_moment": "你們最後的相處", "device": "他那一側用來收她訊息的東西，配合他的時代與世界"}]}
 }
 </inf>
 
