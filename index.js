@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.11.0
+// Nova 無限流面板 v0.12.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -82,6 +82,8 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        pollutionCarry: null,   // 帶進下一個副本的汙染後遺症 {value, source, from}
+        pollutionCleanCost: 0,  // 在白域清理汙染要花的碎片
         autoDossier: true,      // 開局後在背景生成男主人生檔案
         offscreenEvery: 6,      // 每幾回合請 AI 回報男主的幕後行動
         rollWorlds: true,       // 白域大廳由插件抽世界線
@@ -144,6 +146,7 @@ function blankInstance() {
         glossary: [], concessions: [], threads: [],
         pollution: 0, pollution_source: '', pollution_notes: [],
         world_events: [], last_offscreen: 0, dossier_done: false,
+        after_pollution: 0, after_source: '', after_from: '',
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
         map: { regions: [] }, location: '',
@@ -266,6 +269,13 @@ function applyOpen(obj) {
     inst.map.regions = (obj.map?.regions || []).map(normRegion);
     inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
     inst.daily_life = (obj.daily_life || []).map(normLife);
+    const carry = S().pollutionCarry;
+    if (carry?.value) {
+        inst.after_pollution = carry.value;
+        inst.after_source = carry.source;
+        inst.after_from = carry.from;
+        S().pollutionCarry = null;
+    }
     cs.instance = inst;
     cs.mode = 'instance';
     if (!String(inst.line_type || '').includes('支線')) {
@@ -413,6 +423,10 @@ function applyTurn(o) {
     });
 
     const inv = S().inventory;
+    if (inst.after_pollution > 0) {
+        inst.after_pollution = Math.max(0, inst.after_pollution - 3);
+        if (inst.after_pollution === 0) log.push('上一個副本的汙染後遺症消退了');
+    }
     (o.offscreen || []).forEach(x => {
         const c = inst.cast.find(y => y.codename === x.codename);
         if (!c) return;
@@ -501,6 +515,8 @@ function endInstance(end) {
         days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0, real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
     });
+    const cofallStay = /共墮滯留/.test(inst.status);
+    if (cofallStay && !inst.worldline) inst.worldline = `W-${inst.name || inst.id}`;
     if (inst.worldline) {
         let wl = s.worldlines.find(w => w.coordinate === inst.worldline);
         if (!wl) {
@@ -512,6 +528,13 @@ function endInstance(end) {
         if (end.upgrade) wl.upgrade_status = end.upgrade;
         if (end.open_condition) wl.open_condition = end.open_condition;
         if (end.anomaly) wl.anomaly = true;
+        if (cofallStay) {
+            wl.anomaly = true;
+            const src = inst.cast.find(c => c.codename === inst.pollution_source) || inst.cast.find(c => c.role === '主要');
+            wl.obsessed_cast = src?.real_name || src?.codename || wl.obsessed_cast || '';
+            if (!wl.upgrade_status || wl.upgrade_status === '不升級') wl.upgrade_status = '升級（共墮滯留：他徹底崩壞，等她回來）';
+            if (!wl.open_condition) wl.open_condition = end.open_condition || '她準備好回去面對他的時候';
+        }
         if (end.exit_type === '強制召回') {
             const obsessed = s.worldlines.find(w => w.obsessed_cast);
             if (!obsessed) {
@@ -519,6 +542,12 @@ function endInstance(end) {
                 wl.obsessed_cast = main?.real_name || '';
             }
         }
+    }
+    // 汙染後遺症：帶進下一個副本（可在白域清理）
+    const carry = Math.round((Number(inst.pollution) || 0) + (Number(inst.after_pollution) || 0) * 0.5);
+    if (carry >= 20) {
+        const src = inst.cast.find(c => c.codename === inst.pollution_source);
+        s.pollutionCarry = { value: Math.min(100, carry), source: src?.codename || inst.pollution_source || inst.after_source || '', from: inst.pollution ? inst.name : (inst.after_from || inst.name), cofall: /共墮/.test(inst.status) };
     }
     // 僅限本副本的道具在離開時消失
     s.inventory.items = s.inventory.items.filter(it => !(it.instance_id === inst.id && it.carry_rule === '僅限本副本'));
@@ -673,6 +702,9 @@ function buildStateText() {
         if (s.glossary_global.length) t += '白域通用詞彙：\n' + s.glossary_global.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
         t += '最近三個副本（防重複對照）：\n' + recentText();
         t += worldlineSealedText();
+        if (s.pollutionCarry?.value) {
+            t += `\n【她的狀態】她剛從《${s.pollutionCarry.from}》回來，身上帶著汙染後遺症（${s.pollutionCarry.value}/100${s.pollutionCarry.cofall ? '，那是一場共墮' : ''}）。她可能恍神、失眠、在白域裡聽見那個人的聲音。無語察覺到她的狀態不對，用牠的方式照顧她：嘴上嫌棄，卻一直守在旁邊。她可以選擇在白域清理汙染，或帶著它進入下一個副本。\n`;
+        }
         ensureRolled();
         t += rolledText();
         if (cs.next?.kind === 'side') {
@@ -804,8 +836,15 @@ function buildStateText() {
         t += `\n【幕後行動】已經 ${inst.turn - (inst.last_offscreen || 0)} 回合沒有回報男主的幕後進展。本回合請以 offscreen 回報每位主要男主在她看不到的地方推進了什麼。\n`;
     }
 
+    if (inst.after_pollution > 0) {
+        const st = pollutionStage(inst.after_pollution);
+        t += `\n【上一個副本的汙染後遺症】${inst.after_pollution}/100（來自《${inst.after_from}》${inst.after_source ? '中的「' + inst.after_source + '」' : ''}）｜程度相當於「${st[1]}」，正在逐漸消退。\n`;
+        t += '她偶爾會被後遺症拉回去：在相似的聲音、氣味、動作中恍神，下意識尋找那個人，想法短暫地不像自己。這個副本的人不知道原因。後遺症只影響她，不影響本副本男主的設定。\n';
+    }
+
     if (pollutionActive(inst)) {
         const st = pollutionStage(inst.pollution);
+        if (inst.pollution >= 60) t += '\n（汙染度已經很高：若副本在此時結束，instance_end 的 residue 要寫成汙染的後遺症。）';
         t += `\n【汙染度】${inst.pollution || 0}/100｜階段：${st[1]}${inst.pollution_source ? `｜主要來源：${inst.pollution_source}` : ''}\n`;
         t += `這個階段的她：${st[2]}\n`;
         if (inst.pollution_notes?.length) t += `近期的汙染表現：${inst.pollution_notes.slice(-3).join('；')}\n`;
@@ -1294,7 +1333,8 @@ function contactName(c) {
 function makeContacts(inst, end) {
     const letter = diffLetter(inst.difficulty);
     if (!['B', 'A', 'S'].includes(letter)) return 0;
-    if (/失敗|壞結局/.test(end.result || '') || end.exit_type === '強制召回') return 0;
+    if (/失敗|壞結局|滯留/.test(end.result || '') || end.exit_type === '強制召回') return 0;
+    const cofall = /共墮/.test(end.result || '');
     const ph = P();
     const fates = Array.isArray(end.cast_fate) ? end.cast_fate : null;
     let added = 0;
@@ -1302,7 +1342,7 @@ function makeContacts(inst, end) {
         if (ph.contacts.find(x => x.instance_id === inst.id && x.codename === c.codename)) continue;
         const f = fates?.find(x => (x.codename && x.codename === c.codename) || (x.real_name && x.real_name === c.real_name));
         if (fates && !f) continue;
-        if (f && (f.alive === false || f.good_ending !== true)) continue;
+        if (f && (f.alive === false || (f.good_ending !== true && !cofall))) continue;
         if (!f && c.role !== '主要') continue;
         ph.contacts.push({
             id: 'ph_' + Date.now() + '_' + added,
@@ -1705,6 +1745,17 @@ function guide(title, lines, actions = '') {
     </div>`;
 }
 
+function carryCard() {
+    const s = S();
+    const c = s.pollutionCarry;
+    if (!c?.value) return '';
+    const cost = Number(s.pollutionCleanCost) || 0;
+    return card('🩸 汙染後遺症', `
+        <p>來自《${esc(c.from)}》${c.cofall ? '的共墮' : ''}：<b>${c.value}</b>/100（${pollutionStage(c.value)[1]}）</p>
+        <p class="nova-inf-hint">帶進下一個副本的話，每回合會消退 3 點；期間她偶爾會恍神、下意識找那個人。也可以現在在白域清理乾淨。</p>
+        <div class="nova-inf-row">${btn('pol_clean', `清理汙染${cost ? `（${cost} 碎片）` : ''}`, '', 'primary')}${btn('pol_keep', '帶著它走')}</div>`);
+}
+
 function renderOverview() {
     const cs = C();
     const s = S();
@@ -1746,6 +1797,7 @@ function renderOverview() {
             if (cs.next?.kind === 'side') h += `<div class="nova-inf-row">${btn('next_cancel_side', '改成前往下一個主線')}</div>`;
         }
         h += card('白域狀態', `<p>碎片 <b>${s.inventory.shards || 0}</b>　已通關 <b>${s.ledger.length}</b></p>`);
+        h += carryCard();
         if (s.rollWorlds && !cs.options?.length && cs.next?.kind !== 'side') {
             ensureRolled();
             h += card('🎲 這一批的世界線', `
@@ -1814,6 +1866,11 @@ function renderOverview() {
             <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${inst.time_limit_days ? `｜時限 ${fmtDays(inst.time_limit_days)}，剩餘 ${remain < 0 ? '<span class="nova-inf-warn">已超時</span>' : fmtDays(remain)}` : ''}${inst.real_time ? `｜現實約 ${esc(inst.real_time)}` : ''}</p>
             <p>本幕問題：${esc(inst.acts.find(a => a.number === inst.current_act)?.question || '—')}</p>`,
             btn('edit_basic', '編輯'));
+        if (inst.after_pollution > 0) {
+            h += card('🩸 汙染後遺症', `
+                <div class="nova-inf-bar nova-inf-pollution"><div style="width:${inst.after_pollution}%"></div></div>
+                <p class="nova-inf-hint">來自《${esc(inst.after_from)}》，剩 ${inst.after_pollution}，每回合消退 3。</p>`);
+        }
         if (pollutionActive(inst)) {
             const st = pollutionStage(inst.pollution);
             h += card('🩸 汙染度', `
@@ -1850,6 +1907,7 @@ function renderOverview() {
         const lm = s.lastMain;
         const sideBtns = (lm?.cast || []).map(c =>
             btn('next_side', `看「${esc(c.revealed || peek ? (c.real_name || c.codename) : c.codename)}」的過去`, `data-c="${esc(c.codename)}"`)).join('');
+        h += carryCard();
         h += card('下一步', `
             ${lm ? `<p class="nova-inf-sub">支線：上一個主線《${esc(lm.name)}》男主的過去</p>
             <div class="nova-inf-row">${sideBtns}${btn('next_side', '交給 AI 選', 'data-c=""')}</div>` : ''}
@@ -2181,6 +2239,7 @@ function renderSettingsTab() {
         <label class="nova-inf-label"><input type="checkbox" data-set="hideOld" ${s.hideOld ? 'checked' : ''}> 結算後前往下一步時，隱藏前面的訊息（AI 看不到，畫面上還在）</label>`) +
         card('男主人生檔案', `
         <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（目標、仇人、身邊的人、紀念日）</label>
+        <label class="nova-inf-label">在白域清理汙染要花的碎片（0 為免費）<input class="nova-inf-input" type="number" min="0" data-set="pollutionCleanCost" value="${s.pollutionCleanCost || 0}"></label>
         <label class="nova-inf-label">每幾回合請 AI 回報男主的幕後行動<input class="nova-inf-input" type="number" min="3" data-set="offscreenEvery" value="${s.offscreenEvery || 6}"></label>`) +
         card('插件設定', `
         <label class="nova-inf-label"><input type="checkbox" data-set="enabled" ${s.enabled ? 'checked' : ''}> 啟用插件</label>
@@ -2388,6 +2447,17 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'pol_clean': {
+            const cost = Number(s.pollutionCleanCost) || 0;
+            if ((s.inventory.shards || 0) < cost) { toast(`碎片不足，清理需要 ${cost} 碎片`, 'warning'); break; }
+            if (!confirm('清理汙染後遺症？下一個副本她會是清醒的。')) break;
+            s.inventory.shards -= cost;
+            s.pollutionCarry = null;
+            commit();
+            toast('汙染已在白域清理乾淨', 'success');
+            break;
+        }
+        case 'pol_keep': toast('好，汙染會跟著她進下一個副本，並逐漸消退', 'info'); break;
         case 'gen_dossier': if (!inst?.dossier_done || confirm('重新生成會覆蓋目前的人生檔案，確定嗎？')) genDossiers(true); break;
         case 'pol_plus': if (inst) { inst.pollution = Math.min(100, (inst.pollution || 0) + 5); commit(); } break;
         case 'pol_minus': if (inst) { inst.pollution = Math.max(0, (inst.pollution || 0) - 5); commit(); } break;

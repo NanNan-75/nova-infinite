@@ -481,7 +481,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
   "item_add": [{"name": "", "description": "", "carry_rule": "僅限本副本/可帶回白域/可帶回現實"}],
   "item_remove": ["道具名"],
   "mechanic_revealed": false,
-  "instance_end": {"result": "完美通關/部分通關/苦澀通關/共墮/失敗/壞結局", "exit_type": "正常召回/突然消失/未告別/強制召回", "reward_tier": "", "upgrade": "例：C→A 或 不升級", "open_condition": "升級副本的開啟條件", "anomaly": false, "residue": "主線限定：副本留在她身上、回到現實也甩不掉的殘留（肢體習慣、反射動作、口頭禪、感官錯覺），一兩句", "cast_fate": [{"codename": "代號", "alive": true, "good_ending": true, "personality": "他在這個世界被塑造出的性格與說話方式", "calls_her": "他怎麼稱呼她", "story": "你們在這個副本裡的關係歷程（三到五句）", "state": "她離開時他的處境", "last_moment": "你們最後的相處", "device": "他那一側用來收她訊息的東西，配合他的時代與世界"}]}
+  "instance_end": {"result": "完美通關/部分通關/苦澀通關/共墮通關/共墮滯留/失敗/壞結局", "exit_type": "正常召回/突然消失/未告別/強制召回", "reward_tier": "", "upgrade": "例：C→A 或 不升級", "open_condition": "升級副本的開啟條件", "anomaly": false, "residue": "主線限定：副本留在她身上、回到現實也甩不掉的殘留（肢體習慣、反射動作、口頭禪、感官錯覺），一兩句", "cast_fate": [{"codename": "代號", "alive": true, "good_ending": true, "personality": "他在這個世界被塑造出的性格與說話方式", "calls_her": "他怎麼稱呼她", "story": "你們在這個副本裡的關係歷程（三到五句）", "state": "她離開時他的處境", "last_moment": "你們最後的相處", "device": "他那一側用來收她訊息的東西，配合他的時代與世界"}]}
 }
 </inf>
 
@@ -493,6 +493,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
 - 她第一次透過居民、傳聞或親眼所見，接觸到某位男主的 world_mark 時，回報 mark_seen: true。
 - 男主的表面身份露出破綻、且她親眼看到時，以 cast_update 的 slip 回報；他的真實身份在劇情中被揭露時，回報 unmasked: true。
 - 進入新的一幕時，以 cast_update 更新每位主要男主的 short_goal。插件提示需要時，以 offscreen 回報男主的幕後行動。
+- 共墮通關：她與男主一起墮落，但以他們的方式完成了主線。共墮滯留：她放棄主線、選擇留在他身邊，直到被強制召回。兩者的 exit_type 皆依實際情況填寫，cast_fate 照常填寫。
 - pollution_delta 只用於 B 級以上：男主的黑化侵入她的感知或判斷時增加（單回合最多 +10）；她抵抗、抓住現實錨點時減少（單回合最多 −15）。沒有變化就填 0。
 - 只有副本真正結束時才輸出 instance_end。
 - instance_end 的 cast_fate 必須列出每一位男主。alive：他在結局時是否活著；good_ending：他活著，而且她是以好的方式與他告別離開，才為 true。`;
