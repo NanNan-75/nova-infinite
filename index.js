@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.7.1
+// Nova 無限流面板 v0.7.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -776,7 +776,7 @@ function onMessageReceived(mesId) {
         if (logs.filter(Boolean).length) toast(logs.filter(Boolean).join('｜'), 'success');
     }
 
-    scanLeaks(text, open.found.join('\n'));
+    scanLeaks(text, [...open.found, ...opts.found].join('\n'));
 
     if (cs.instance) cs.instance.turn = cs.instance.turn || 0;
     takeSnapshot();
@@ -790,7 +790,7 @@ function onMessageReceived(mesId) {
 function scanLeaks(text, openRaw) {
     const s = S();
     const cs = C();
-    if (!s.enabled || !cs || !['opening', 'instance'].includes(cs.mode)) return;
+    if (!s.enabled || !cs || !['lobby', 'opening', 'instance'].includes(cs.mode)) return;
     const words = String(s.bannedWords || '').split(/[,，、\n]/).map(w => w.trim()).filter(Boolean);
     const hay = `${text}\n${openRaw || ''}`;
     const hitWords = words.filter(w => hay.includes(w));
@@ -800,6 +800,9 @@ function scanLeaks(text, openRaw) {
     const parts = [];
     if (hitWords.length) parts.push(`出現禁用素材：${hitWords.join('、')}`);
     if (hitNames.length) parts.push(`正文出現未揭露的真名（${hitNames.join('、')}）`);
+    // 卡司總人數外洩：十四位、14 個……
+    const cnt = hay.match(/(十四|14)\s*(位|個|名|節|枚|尊|幅|人|座|扇|把|道|間|張|顆|種|條|塊|盞|只|隻|具|份|處|層|頁|首|根)/g);
+    if (cnt) parts.push(`出現與卡司總人數相同的數量（${Array.from(new Set(cnt)).join('、')}），可能在暗示男主`);
     if (parts.length) toast(parts.join('｜') + '。可以考慮重新生成。', 'warning');
 }
 
