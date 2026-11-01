@@ -399,6 +399,8 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
     {"codename": "代號", "identity": "真實的副本身份", "cover": "隱藏身份時，她一開始看到的表面身份（沒有隱藏就留空）", "category": "A/B/C/D", "role": "主要/次要/隱藏存在", "resource": "手中握有的主線資源", "friction": "身份與性格的摩擦點",
      "this_life": "此世性格：他的核心驅動力在這個身份與成長環境中，被塑造成什麼樣的表現（一兩句）",
      "appearance": "他在本副本的外型：髮色、瞳色、髮型、膚色、體格、明顯特徵（疤痕等）、穿著風格。髮色瞳色預設為自然色，除非世界設定給出理由",
+     "aftermath": "主線限定：她（在他的過去）消失後，他經歷了什麼、做了什麼驚天動地的事，如何改變了這個世界與他自己（兩三句；支線留空）",
+     "world_mark": "主線限定：這件事留在世界上、居民看得見或流傳的痕跡與傳聞，用居民的說法描述，不點名是他（支線留空）",
      "real_name": "真名", "affinity": 100, "history_length": "歷程長度", "relation_type": "關係性質", "influence": "她曾如何改變他", "remnant": "只屬於他們的專屬殘留物", "promise": "未竟之約", "obsession_stage": "錯過/擦肩/重逢/糾纏/深化"}
   ],
   "people": [{"name": "NPC名稱", "identity": "身份", "faction": "勢力", "observed_attitude": "表面上對她的態度", "hidden_truth": "真正立場"}],
@@ -458,7 +460,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
   "region_add": [{"name": "", "desc": "", "access": "", "travel": "", "danger": "", "sealed_note": ""}],
   "life_add": [{"function": "", "local_name": "", "desc": "", "access": ""}],
   "concession": {"giver": "代號", "what": "讓渡了什麼", "form": "形式", "cost": "代價", "consequence": "埋下的後續"},
-  "cast_update": [{"codename": "代號", "affinity_delta": 2, "revealed": false, "obsession_stage": "", "slip": "本回合她親眼看到的破綻（沒有就省略）", "unmasked": false}],
+  "cast_update": [{"codename": "代號", "affinity_delta": 2, "revealed": false, "obsession_stage": "", "slip": "本回合她親眼看到的破綻（沒有就省略）", "unmasked": false, "mark_seen": false}],
   "people_add": [{"name": "", "identity": "", "faction": "", "observed_attitude": "", "hidden_truth": ""}],
   "people_update": [{"name": "", "status": "", "observed_attitude": ""}],
   "faction_add": [{"name": "", "stance": "公開立場", "true_goal": "真正目的", "related": "相關男主代號"}],
@@ -478,6 +480,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
 - 每回合最多釋出 1 條新線索；若本回合已有讓渡，不再額外釋出。
 - 每埋下一條伏筆就以 thread_add 回報；伏筆回收時以 thread_resolve 回報對應的 id。
 - day 為經過的天數（增加量）。時間跳躍時可以一次回報數十、數百天。
+- 她第一次透過居民、傳聞或親眼所見，接觸到某位男主的 world_mark 時，回報 mark_seen: true。
 - 男主的表面身份露出破綻、且她親眼看到時，以 cast_update 的 slip 回報；他的真實身份在劇情中被揭露時，回報 unmasked: true。
 - 只有副本真正結束時才輸出 instance_end。
 - instance_end 的 cast_fate 必須列出每一位男主。alive：他在結局時是否活著；good_ending：他活著，而且她是以好的方式與他告別離開，才為 true。`;

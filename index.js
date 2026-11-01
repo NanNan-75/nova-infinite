@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.8.3
+// Nova 無限流面板 v0.9.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -282,6 +282,7 @@ function normCast(c) {
         codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', this_life: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         cover: '', unmasked: false, slips: [],
+        aftermath: '', world_mark: '', mark_seen: false,
         last_seen_turn: 0,
     }, c);
 }
@@ -362,6 +363,7 @@ function applyTurn(o) {
             if (!c.slips.includes(u.slip)) { c.slips.push(u.slip); log.push(`她注意到「${c.codename}」的破綻`); }
         }
         if (u.unmasked === true && !c.unmasked) log.push(`「${c.codename}」的真實身份揭露了`);
+        if (u.mark_seen === true && !c.mark_seen) log.push('她聽聞了一則世界傳聞');
         for (const k of Object.keys(u)) if (!['codename', 'affinity_delta', 'slip'].includes(k) && u[k] !== '' && u[k] !== undefined) c[k] = u[k];
     });
     (o.cast_add || []).forEach(c => inst.cast.push(normCast(c)));
@@ -494,7 +496,7 @@ function endInstance(end) {
     if (!String(inst.line_type || '').includes('支線')) {
         s.lastMain = {
             instance_id: inst.id, name: inst.name, worldline: inst.worldline,
-            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length })),
+            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark })),
         };
     }
     const added = makeContacts(inst, end);
@@ -535,7 +537,9 @@ function sideText(src) {
     t += src.target ? `支線對象：${src.target}\n` : '支線對象：由你從下列男主中選一位\n';
     (lm.cast || []).forEach(c => {
         t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
+        if (c.aftermath) t += `  她消失後他做的事（支線的結局必須能通向這裡）：${c.aftermath}\n`;
     });
+    t += '支線中男主可以死亡；若主線中他的處境來自死亡或異變（化為非人、被詛咒、墮落、成為傳說），支線就要寫到那一步的起點。\n';
     t += '依〈主線與支線的時間〉：支線發生在他的過去，世界與她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
     return t;
 }
@@ -703,6 +707,8 @@ function buildStateText() {
                 t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜真名${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}${c.cover ? `｜曾以「${c.cover}」的身份隱藏，已揭露` : ''}\n`;
             }
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
+            if (c.aftermath) t += `  【封存】她消失後他做的事：${c.aftermath}\n`;
+            if (c.world_mark) t += `  這件事留在世界上的痕跡（居民可見，傳聞中不得點名是他）：${c.world_mark}${c.mark_seen ? '｜她已聽聞' : (inst.current_act <= 1 ? '｜⚠ 她還沒聽聞：第一幕內以居民、傳聞、小道消息或親眼所見呈現' : '｜⚠ 她還沒聽聞：盡快呈現')}\n`;
             if (c.this_life) t += `  【封存】此世性格（言行依據）：${c.this_life}\n`;
             t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
             if (c.role === '主要' && gap >= 5) t += `｜已 ${gap} 回合未出場：待目前場景結束後，以隱藏存在或新場景介入`;
@@ -1677,6 +1683,11 @@ function renderPeople() {
             <div class="nova-inf-row">${delBtn('cast', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
 
+    const marks = inst.cast.filter(c => c.world_mark && c.mark_seen);
+    if (marks.length || inst.cast.some(c => c.world_mark)) {
+        h += card('這個世界的傳聞', (marks.length ? marks.map(c => `<div class="nova-inf-item">${esc(c.world_mark)}</div>`).join('') : '<p class="nova-inf-empty">還沒聽說什麼。</p>') +
+            '<p class="nova-inf-hint">你聽說過的、讓人不安的事。不會標出跟誰有關。</p>');
+    }
     h += card('人物', inst.people.map((p, i) => `
         <div class="nova-inf-item">
             <div><b>${esc(p.name)}</b>｜${esc(p.identity)}｜${esc(p.faction)}｜${esc(p.status)}</div>
