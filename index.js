@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.9.0
+// Nova 無限流面板 v0.9.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -866,6 +866,21 @@ function onMessageReceived(mesId) {
     }
     const tagCount = open.found.length + turn.found.length + opts.found.length + pick.found.length;
 
+    // 標籤只有開頭沒有結尾：多半是回覆長度上限太小，資料被截斷
+    const cut = ['inf_open', 'inf', 'inf_options'].filter(tg => new RegExp(`<${tg}>`).test(text) && !new RegExp(`</${tg}>`).test(text));
+    if (cut.length) {
+        msg.extra = msg.extra || {};
+        const at = text.search(new RegExp(`<(${cut.join('|')})>`));
+        msg.extra.nova_inf_partial = text.slice(at);
+        text = text.slice(0, at).replace(/\s+$/, '');
+        msg.mes = text;
+        if (Array.isArray(msg.swipes) && msg.swipes[msg.swipe_id] !== undefined) msg.swipes[msg.swipe_id] = text;
+        msg.extra.nova_inf_cleaned = true;
+        toast(cut.includes('inf_open')
+            ? '開局資料被截斷了（回覆長度上限太小）。到面板總覽按「補抓開局資料」，或把回覆長度調大後重新生成。'
+            : '回合資料被截斷了，這一輪的更新沒有寫入。建議把回覆長度調大。', 'error');
+    }
+
     if (tagCount) {
         text = text.replace(/\s+$/, '');
         msg.extra = msg.extra || {};
@@ -968,6 +983,7 @@ function pickOption(idx) {
         cs.mode = 'opening';
         cs.seed = seed;
         cs.instance = null;
+        cs.openingSince = ctx().chat?.length || 0;
         cs.options = [];
         cs.next = null;
         cs.lock = false;
@@ -1008,6 +1024,40 @@ async function hideOldMessages() {
     } catch (e) { console.warn('[Nova無限流] 隱藏訊息失敗', e); }
     c.chat.forEach(m => { m.is_system = true; });
     try { await c.saveChat?.(); } catch (e) { /* 忽略 */ }
+}
+
+// 開局資料遺失或被截斷時：根據最後一則 AI 正文，在背景補生成 <inf_open>
+async function recoverOpen() {
+    const cs = C();
+    const i = lastAiIndex();
+    if (!cs || i < 0) { toast('找不到 AI 的開局正文', 'warning'); return; }
+    const msg = ctx().chat[i];
+    const prevMode = cs.mode;
+    cs.mode = 'opening';
+    const system = sub(buildRulesText() + '\n\n' + buildStateText());
+    cs.mode = prevMode;
+    const prompt = sub(`以下是副本開局的正文。請根據正文，只輸出一個完整的 <inf_open> 標籤（內容為合法 JSON），不要輸出任何其他文字。
+正文中出現的人物、地點、名詞、時間必須與 JSON 一致；正文沒有寫到的欄位，依規則自行補完，但不得與正文矛盾。
+
+【正文】
+${msg.mes || ''}`);
+    toast('正在補抓開局資料，請稍等…', 'info');
+    try {
+        const raw = await genRaw(system, prompt, 8192);
+        const found = extractTags(String(raw || ''), 'inf_open').found;
+        const obj = parseJsonLoose(found[0] ?? raw);
+        if (!obj || typeof obj !== 'object') throw new Error('AI 回傳的不是完整的 JSON（可能又被截斷了）');
+        const r = applyOpen(obj);
+        msg.extra = msg.extra || {};
+        msg.extra.nova_inf_raw = (msg.extra.nova_inf_raw ? msg.extra.nova_inf_raw + '\n' : '') + `<inf_open>${JSON.stringify(obj)}</inf_open>`;
+        delete msg.extra.nova_inf_partial;
+        try { await ctx().saveChat?.(); } catch (e) { /* 忽略 */ }
+        commit();
+        toast(r + '（已補上）', 'success');
+    } catch (e) {
+        console.warn('[Nova無限流] 補抓開局失敗', e);
+        toast('補抓失敗：' + (e.message || e), 'error');
+    }
 }
 
 // 結算後在同一個聊天前往下一步
@@ -1168,12 +1218,12 @@ function phoneConversation(c) {
     return sub(t);
 }
 
-async function genRaw(systemPrompt, prompt) {
+async function genRaw(systemPrompt, prompt, responseLength = null) {
     const fn = ctx().generateRaw;
     if (typeof fn !== 'function') throw new Error('這個版本的酒館不支援背景生成，請更新酒館');
     const src = Function.prototype.toString.call(fn);
-    if (/^\s*(async\s+)?(function\s*)?\w*\s*\(\s*\{/.test(src)) return await fn({ prompt, systemPrompt });
-    return await fn(prompt, null, false, false, systemPrompt);
+    if (/^\s*(async\s+)?(function\s*)?\w*\s*\(\s*\{/.test(src)) return await fn(Object.assign({ prompt, systemPrompt }, responseLength ? { responseLength } : {}));
+    return await fn(prompt, null, false, false, systemPrompt, responseLength);
 }
 
 function parsePhoneReply(raw, c) {
@@ -1553,6 +1603,11 @@ function renderOverview() {
             '回到聊天，<b>送出第一則訊息</b>（例如「開始」，或你想做的第一個動作）。',
             'AI 回覆後，面板會自動切到「副本進行中」，人物、線索、地圖都會出現。',
         ]);
+        if (lastAiIndex() >= (cs.openingSince || 0) && lastAiIndex() >= 0 && (ctx().chat || []).some(m => m.is_user && !m.is_system)) {
+            h += card('AI 已經寫了開局，面板卻沒有資料？', `
+                <p class="nova-inf-hint">通常是回覆長度上限太小，資料在最後被截斷了。按下面的按鈕，插件會根據最後一則 AI 回覆，在背景補生成開局資料（不會改動正文）。</p>
+                <div class="nova-inf-row">${btn('recover_open', '補抓開局資料', '', 'primary')}</div>`);
+        }
         const sd = cs.seed || {};
         const f = (k, label, ph = '') => `<label class="nova-inf-label">${label}<textarea class="nova-inf-input" rows="2" data-seed="${k}" placeholder="${ph}">${esc(sd[k] || '')}</textarea></label>`;
         h += card('副本種子卡', `
@@ -1943,7 +1998,7 @@ function renderSettingsTab() {
         card('世界線抽籤', `
         <label class="nova-inf-label"><input type="checkbox" data-set="rollWorlds" ${s.rollWorlds ? 'checked' : ''}> 白域大廳由插件隨機抽世界線（避免 AI 一直選同類型）</label>
         <label class="nova-inf-label">一批抽幾個（等於副本選項數量，1–8）<input class="nova-inf-input" type="number" min="1" max="8" data-set="rollCount" value="${s.rollCount || 3}"></label>
-        <div class="nova-inf-row">${btn('pool_add_modern', '＋ 加入近現代題材包')}</div>
+        <div class="nova-inf-row">${btn('pool_add_modern', '＋ 加入近現代題材包')}${btn('pool_add_fairy', '＋ 加入童話改寫包')}</div>
         <label class="nova-inf-label">抽籤池（用頓號、逗號或換行分隔；最近三個副本用過的會自動跳過）
             <textarea class="nova-inf-input" rows="6" data-set="worldPool">${esc(s.worldPool || '')}</textarea></label>`) +
         card('禁用素材清單', `
@@ -2137,12 +2192,21 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'recover_open': recoverOpen(); break;
         case 'pool_add_modern': {
             const have = new Set(poolList());
             const add = '娛樂圈、電競圈、時尚圈、選秀節目、豪門財閥、職場商戰、醫院、律師事務所、新聞媒體、刑偵、賽車場、拍賣行、古董界、料理界、畫廊藝術圈、職業運動、航空公司、偏鄉小鎮、九零年代港風、八零年代'.split('、').filter(w => !have.has(w));
             s.worldPool = [...poolList(), ...add].join('、');
             saveSettings(); renderPanel();
             toast(add.length ? `加入了 ${add.length} 個近現代題材` : '抽籤池裡已經都有了', 'success');
+            break;
+        }
+        case 'pool_add_fairy': {
+            const have = new Set(poolList());
+            const add = '童話改寫：綠野仙蹤、童話改寫：太陽之東月亮之西、童話改寫：雪后、童話改寫：野天鵝、童話改寫：紅鞋、童話改寫：小錫兵、童話改寫：夜鶯、童話改寫：拇指姑娘、童話改寫：十二個跳舞的公主、童話改寫：白雪與紅玫瑰、童話改寫：六隻天鵝、童話改寫：杜松樹、童話改寫：哈默林的吹笛人、童話改寫：藍鬍子、童話改寫：驢皮公主、童話改寫：快樂王子、童話改寫：星孩、童話改寫：夜鶯與玫瑰、童話改寫：自私的巨人、童話改寫：金河王、童話改寫：北風的背後、童話改寫：公主與哥布林、童話改寫：輕輕公主、童話改寫：水孩子、童話改寫：胡桃鉗與老鼠王、童話改寫：青鳥、童話改寫：尼爾斯騎鵝旅行記、童話改寫：火鳥、童話改寫：美麗的瓦西莉莎、童話改寫：雪姑娘、童話改寫：竹取物語、童話改寫：浦島太郎、童話改寫：鶴的報恩、童話改寫：白蛇傳、童話改寫：格列佛遊記、童話改寫：吹牛男爵歷險記'.split('、').filter(w => !have.has(w));
+            s.worldPool = [...poolList(), ...add].join('、');
+            saveSettings(); renderPanel();
+            toast(add.length ? `加入了 ${add.length} 個童話` : '抽籤池裡已經都有了', 'success');
             break;
         }
         case 'reroll_worlds': cs.rolled = rollWorlds(Math.min(8, Math.max(1, Number(s.rollCount) || 3))); commit(); break;
