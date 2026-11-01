@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.12.1
+// Nova 無限流面板 v0.13.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -82,6 +82,7 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        api: { provider: 'st', key: '', model: 'gemini-2.5-flash', baseUrl: '', maxTokens: 32768, temperature: 0.9 },
         pollutionCarry: null,   // 帶進下一個副本的汙染後遺症 {value, source, from}
         pollutionCleanCost: 0,  // 在白域清理汙染要花的碎片
         autoDossier: true,      // 開局後在背景生成男主人生檔案
@@ -986,6 +987,7 @@ function onMessageReceived(mesId) {
         const obj = parseJsonLoose(raw);
         if (obj) {
             logs.push(applyOpen(obj));
+            if (cs.instance) cs.instance.open_mes = Number(mesId);
             if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
         }
         else toast('開局標籤解析失敗，請檢查 JSON 格式（原文已保存在訊息資料中）', 'warning');
@@ -1176,9 +1178,32 @@ async function hideOldMessages() {
 }
 
 // 開局資料遺失或被截斷時：根據最後一則 AI 正文，在背景補生成 <inf_open>
-async function recoverOpen() {
+// 開局資料只缺一部分時：只補空的欄位，不覆蓋已有的資料
+function mergeOpen(obj) {
+    const inst = C()?.instance;
+    if (!inst) return applyOpen(obj);
+    const filled = [];
+    const empty = v => !v || (Array.isArray(v) && !v.length);
+    if (empty(inst.cast) && obj.cast?.length) { inst.cast = obj.cast.map(normCast); filled.push('男主'); }
+    if (empty(inst.people) && obj.people?.length) { inst.people = obj.people.map(p => Object.assign({ name: '', identity: '', faction: '', player_note: '', observed_attitude: '', status: '在場', hidden_truth: '' }, p)); filled.push('人物'); }
+    if (empty(inst.factions) && obj.factions?.length) { inst.factions = obj.factions.map(normFaction); filled.push('勢力'); }
+    if (empty(inst.acts) && obj.acts?.length) { inst.acts = obj.acts.map((a, i) => ({ number: a.number ?? i + 1, question: a.question || '', truth: a.truth || '', day_end: Number(a.day_end) || 0, milestone: a.milestone || '', twist: a.twist || '', emotion_focus: a.emotion_focus || '', done: false })); filled.push('幕'); }
+    if (empty(inst.clues) && obj.clues?.length) { inst.clues = obj.clues.map((c, i) => normClue(c, i)); filled.push('線索'); }
+    if (empty(inst.threads) && obj.threads?.length) { inst.threads = obj.threads.map((t, i) => normThread(t, i, 0)); filled.push('伏筆'); }
+    if (empty(inst.glossary) && obj.glossary?.length) { inst.glossary = obj.glossary.map(g => ({ term: g.term || '', desc: g.desc || '', revealed: true })); filled.push('辭典'); }
+    if (empty(inst.map?.regions) && obj.map?.regions?.length) { inst.map.regions = obj.map.regions.map(normRegion); if (!inst.location) inst.location = obj.map.start || inst.map.regions[0]?.name || ''; filled.push('地圖'); }
+    if (empty(inst.calendar?.events) && obj.calendar?.events?.length) { inst.calendar.events = obj.calendar.events.map((e, i) => normEvent(e, i)); if (!inst.calendar.calendar_name) Object.assign(inst.calendar, { calendar_name: obj.calendar.calendar_name || '', date_label: obj.calendar.date_label || '', time_label: obj.calendar.time_label || '' }); filled.push('日曆'); }
+    if (empty(inst.daily_life) && obj.daily_life?.length) { inst.daily_life = obj.daily_life.map(normLife); filled.push('生活'); }
+    if (!inst.identity_card?.name && obj.identity_card) { inst.identity_card = Object.assign(inst.identity_card || {}, obj.identity_card); filled.push('身份卡'); }
+    if (!inst.world_change?.what && obj.world_change) { inst.world_change = Object.assign({ what: '', before: '', cause: '' }, obj.world_change); filled.push('世界的崩壞'); }
+    if (!inst.era?.tech_level && obj.era) { inst.era = Object.assign(inst.era || {}, obj.era); filled.push('時代'); }
+    return filled.length ? `補上了：${filled.join('、')}` : '沒有需要補的欄位';
+}
+
+async function recoverOpen(merge = false) {
     const cs = C();
-    const i = lastAiIndex();
+    const openIdx = cs?.instance?.open_mes;
+    const i = Number.isInteger(openIdx) && ctx().chat?.[openIdx] ? openIdx : lastAiIndex();
     if (!cs || i < 0) { toast('找不到 AI 的開局正文', 'warning'); return; }
     const msg = ctx().chat[i];
     const prevMode = cs.mode;
@@ -1196,8 +1221,10 @@ ${msg.mes || ''}`);
         const found = extractTags(String(raw || ''), 'inf_open').found;
         const obj = parseJsonLoose(found[0] ?? raw);
         if (!obj || typeof obj !== 'object') throw new Error('AI 回傳的不是完整的 JSON（可能又被截斷了）');
-        const r = applyOpen(obj);
-        if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
+        const hadCast = !!cs.instance?.cast?.length;
+        const r = merge && cs.instance ? mergeOpen(obj) : applyOpen(obj);
+        if (cs.instance) cs.instance.open_mes = i;
+        if (S().autoDossier && (!merge || !hadCast)) setTimeout(() => genDossiers(false), 1500);
         msg.extra = msg.extra || {};
         msg.extra.nova_inf_raw = (msg.extra.nova_inf_raw ? msg.extra.nova_inf_raw + '\n' : '') + `<inf_open>${JSON.stringify(obj)}</inf_open>`;
         delete msg.extra.nova_inf_partial;
@@ -1437,7 +1464,52 @@ function phoneConversation(c) {
     return sub(t);
 }
 
+// 插件專用 API：背景生成（補抓開局、人生檔案、通訊器）不走酒館的連線
+async function customGen(systemPrompt, prompt) {
+    const a = S().api || {};
+    const max = Number(a.maxTokens) || 32768;
+    const temp = Number.isFinite(Number(a.temperature)) ? Number(a.temperature) : 0.9;
+    if (!a.key) throw new Error('插件專用 API 還沒填金鑰');
+    if (a.provider === 'gemini') {
+        const model = (a.model || 'gemini-2.5-flash').trim();
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(a.key.trim())}`;
+        const cats = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT'];
+        const res = await fetch(url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: { maxOutputTokens: max, temperature: temp },
+                safetySettings: cats.map(category => ({ category, threshold: 'BLOCK_NONE' })),
+            }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`Gemini 回應錯誤 ${res.status}：${j?.error?.message || ''}`);
+        const cand = j.candidates?.[0];
+        const text = (cand?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
+        if (!text) throw new Error(`Gemini 沒有回傳內容（${cand?.finishReason || j.promptFeedback?.blockReason || '原因不明'}）`);
+        if (cand?.finishReason === 'MAX_TOKENS') toast('插件 API 的輸出達到上限，內容可能不完整。可以把「輸出上限」調大。', 'warning');
+        return text;
+    }
+    // OpenAI 相容（OpenRouter、自架代理等）
+    const base = (a.baseUrl || '').trim().replace(/\/+$/, '');
+    if (!base) throw new Error('請填 API 網址');
+    const res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.key.trim()}` },
+        body: JSON.stringify({ model: a.model, max_tokens: max, temperature: temp, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`API 回應錯誤 ${res.status}：${j?.error?.message || ''}`);
+    const ch = j.choices?.[0];
+    if (ch?.finish_reason === 'length') toast('插件 API 的輸出達到上限，內容可能不完整。可以把「輸出上限」調大。', 'warning');
+    const text = ch?.message?.content || '';
+    if (!text) throw new Error('API 沒有回傳內容');
+    return text;
+}
+
 async function genRaw(systemPrompt, prompt, responseLength = null) {
+    if (S().api?.provider && S().api.provider !== 'st') return await customGen(systemPrompt, prompt);
     const fn = ctx().generateRaw;
     if (typeof fn !== 'function') throw new Error('這個版本的酒館不支援背景生成，請更新酒館');
     const src = Function.prototype.toString.call(fn);
@@ -1900,6 +1972,7 @@ function renderOverview() {
                 ${btn('act_next', '進入下一幕')}
                 ${btn('end_manual', '手動結束副本')}
                 ${pollutionActive(inst) ? btn('pol_plus', '汙染 +5') + btn('pol_minus', '汙染 −5') : ''}
+                ${btn('recover_merge', '補齊開局資料（只補空的欄位）')}
             </div></details>`;
         h += `<div class="nova-inf-danger-zone">
             <b>危險操作</b>
@@ -2248,6 +2321,22 @@ function renderSettingsTab() {
                 <option value="new" ${s.continueMode === 'new' ? 'selected' : ''}>開新聊天</option>
             </select></label>
         <label class="nova-inf-label"><input type="checkbox" data-set="hideOld" ${s.hideOld ? 'checked' : ''}> 結算後前往下一步時，隱藏前面的訊息（AI 看不到，畫面上還在）</label>`) +
+        card('插件專用 API', `
+        <p class="nova-inf-hint">補抓開局資料、男主人生檔案、通訊器這些「背景生成」，可以改用另一組 API，不受酒館回覆長度限制。正文仍然走酒館原本的連線。</p>
+        <label class="nova-inf-label">使用
+            <select class="nova-inf-input" data-api="provider">
+                <option value="st" ${(s.api?.provider || 'st') === 'st' ? 'selected' : ''}>酒館目前的連線（預設）</option>
+                <option value="gemini" ${s.api?.provider === 'gemini' ? 'selected' : ''}>Google Gemini（填 API 金鑰）</option>
+                <option value="openai" ${s.api?.provider === 'openai' ? 'selected' : ''}>OpenAI 相容（OpenRouter、代理等）</option>
+            </select></label>
+        ${s.api?.provider && s.api.provider !== 'st' ? `
+        <label class="nova-inf-label">API 金鑰<input class="nova-inf-input" type="password" autocomplete="off" data-api="key" value="${esc(s.api.key || '')}"></label>
+        ${s.api.provider === 'openai' ? `<label class="nova-inf-label">API 網址（例：https://openrouter.ai/api/v1）<input class="nova-inf-input" data-api="baseUrl" value="${esc(s.api.baseUrl || '')}"></label>` : ''}
+        <label class="nova-inf-label">模型<input class="nova-inf-input" data-api="model" value="${esc(s.api.model || '')}" placeholder="gemini-2.5-flash"></label>
+        <label class="nova-inf-label">輸出上限（token）<input class="nova-inf-input" type="number" min="1024" data-api="maxTokens" value="${s.api.maxTokens || 32768}"></label>
+        <label class="nova-inf-label">溫度<input class="nova-inf-input" type="number" step="0.1" min="0" max="2" data-api="temperature" value="${s.api.temperature ?? 0.9}"></label>
+        <div class="nova-inf-row">${btn('api_test', '測試連線')}</div>
+        <p class="nova-inf-hint">金鑰存在酒館的設定檔裡，匯出備份時不會包含。</p>` : ''}`) +
         card('男主人生檔案', `
         <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（目標、仇人、身邊的人、紀念日）</label>
         <label class="nova-inf-label">在白域清理汙染要花的碎片（0 為免費）<input class="nova-inf-input" type="number" min="0" data-set="pollutionCleanCost" value="${s.pollutionCleanCost || 0}"></label>
@@ -2472,7 +2561,13 @@ function onBodyClick(ev) {
         case 'gen_dossier': if (!inst?.dossier_done || confirm('重新生成會覆蓋目前的人生檔案，確定嗎？')) genDossiers(true); break;
         case 'pol_plus': if (inst) { inst.pollution = Math.min(100, (inst.pollution || 0) + 5); commit(); } break;
         case 'pol_minus': if (inst) { inst.pollution = Math.max(0, (inst.pollution || 0) - 5); commit(); } break;
-        case 'recover_open': recoverOpen(); break;
+        case 'recover_open': recoverOpen(false); break;
+        case 'recover_merge': recoverOpen(true); break;
+        case 'api_test': (async () => {
+            toast('測試中…', 'info');
+            try { const t = await genRaw('你是測試助手。', '請只回覆「連線成功」四個字。'); toast('插件 API 回應：' + String(t).slice(0, 40), 'success'); }
+            catch (e) { toast('測試失敗：' + (e.message || e), 'error'); }
+        })(); break;
         case 'pool_add_modern': {
             const have = new Set(poolList());
             const add = '娛樂圈、電競圈、時尚圈、選秀節目、豪門財閥、職場商戰、醫院、律師事務所、新聞媒體、刑偵、賽車場、拍賣行、古董界、料理界、畫廊藝術圈、職業運動、航空公司、偏鄉小鎮、九零年代港風、八零年代'.split('、').filter(w => !have.has(w));
@@ -2624,7 +2719,9 @@ function onBodyClick(ev) {
             }
             break;
         case 'export': {
-            const data = { settings: s, chat: cs };
+            const safe = clone(s);
+            if (safe.api) safe.api.key = '';
+            const data = { settings: safe, chat: cs };
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -2640,7 +2737,9 @@ function onBodyClick(ev) {
                 const obj = parseJsonLoose(await file.text());
                 if (!obj?.settings) { toast('檔案格式不對', 'error'); return; }
                 if (!confirm('匯入會覆蓋全域資料（帳本、背包、規則等），確定？')) return;
+                const oldApi = clone(S().api);
                 ctx().extensionSettings[MODULE] = obj.settings;
+                if (oldApi?.key && !obj.settings.api?.key) obj.settings.api = oldApi;
                 if (obj.chat && confirm('也要把備份中的副本狀態套用到目前這個聊天嗎？')) ctx().chatMetadata[MODULE] = obj.chat;
                 commit();
             };
@@ -2685,6 +2784,14 @@ function onBodyChange(ev) {
         r.title = t.value.trim() || '未命名規則';
         openRuleId = r.id;
         saveSettings(); renderPanel(); return;
+    }
+    if (t.dataset.api) {
+        if (!s.api) s.api = {};
+        const k = t.dataset.api;
+        s.api[k] = t.type === 'number' ? Number(t.value) : t.value;
+        saveSettings();
+        if (k === 'provider') renderPanel();
+        return;
     }
     if (t.dataset.phoneSet) { const ph = P(); ph[t.dataset.phoneSet] = Math.max(0, Number(t.value) || 0); saveSettings(); return; }
     if (t.dataset.set === 'bannedWords') { s.bannedWords = t.value; saveSettings(); return; }
