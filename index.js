@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.8.0
+// Nova 無限流面板 v0.8.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -278,6 +278,7 @@ function normCast(c) {
     return Object.assign({
         codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', this_life: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
+        cover: '', unmasked: false, slips: [],
         last_seen_turn: 0,
     }, c);
 }
@@ -353,7 +354,12 @@ function applyTurn(o) {
         const c = inst.cast.find(x => x.codename === u.codename);
         if (!c) return;
         if (typeof u.affinity_delta === 'number') c.affinity = (Number(c.affinity) || 0) + u.affinity_delta;
-        for (const k of Object.keys(u)) if (!['codename', 'affinity_delta'].includes(k) && u[k] !== '' && u[k] !== undefined) c[k] = u[k];
+        if (u.slip) {
+            if (!Array.isArray(c.slips)) c.slips = [];
+            if (!c.slips.includes(u.slip)) { c.slips.push(u.slip); log.push(`她注意到「${c.codename}」的破綻`); }
+        }
+        if (u.unmasked === true && !c.unmasked) log.push(`「${c.codename}」的真實身份揭露了`);
+        for (const k of Object.keys(u)) if (!['codename', 'affinity_delta', 'slip'].includes(k) && u[k] !== '' && u[k] !== undefined) c[k] = u[k];
     });
     (o.cast_add || []).forEach(c => inst.cast.push(normCast(c)));
 
@@ -654,7 +660,14 @@ function buildStateText() {
         t += '\n【本副本卡司】（其餘成員不存在於本副本）\n';
         inst.cast.forEach(c => {
             const gap = inst.turn - (c.last_seen_turn || 0);
-            t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜身分${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}\n`;
+            const hidden = c.cover && !c.unmasked;
+            if (hidden) {
+                t += `- 代號「${c.codename}」｜她所知的身份：${c.cover}（她只知道這個）｜${c.role}｜真名${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}\n`;
+                t += `  【封存】真實身份：${c.identity}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}。真實身份尚未揭露：正文不得以她的視角承認、暗示或替他的異常找理由。\n`;
+                t += `  她已注意到的破綻：${(c.slips || []).join('；') || '尚無'}\n`;
+            } else {
+                t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜真名${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}${c.cover ? `｜曾以「${c.cover}」的身份隱藏，已揭露` : ''}\n`;
+            }
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
             if (c.this_life) t += `  【封存】此世性格（言行依據）：${c.this_life}\n`;
             t += `  【封存】真名：${c.real_name}｜好感：${c.affinity}｜歷程：${c.history_length}｜關係：${c.relation_type}｜影響成因：${c.influence}｜專屬殘留物：${c.remnant}｜未竟之約：${c.promise}｜執念階段：${c.obsession_stage}`;
@@ -1611,10 +1624,14 @@ function renderPeople() {
     let h = '';
     h += card('卡司', inst.cast.map((c, i) => `
         <div class="nova-inf-item">
-            <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類 ${c.revealed ? '｜<i>已揭露</i>' : ''}</div>
+            ${c.cover && !c.unmasked ? `
+            <div><b>${esc(c.codename)}</b>｜${esc(c.cover)}｜${esc(c.role)}</div>
+            <div class="nova-inf-sub">真實身份：${sealedVal(c.identity)}｜資源：${sealedVal(c.resource)}</div>
+            ${(c.slips || []).length ? `<div class="nova-inf-sub">你注意到的破綻：${c.slips.map(esc).join('；')}</div>` : ''}` : `
+            <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類${c.cover ? `｜<i>原本自稱：${esc(c.cover)}</i>` : ''}</div>
+            <div class="nova-inf-sub">資源：${esc(c.resource)}</div>`}
             <div class="nova-inf-sub">真名：${c.revealed ? esc(c.real_name) : sealedVal(c.real_name)}｜好感：${sealedVal(c.affinity)}</div>
             ${c.appearance ? `<div class="nova-inf-sub">外型：${esc(c.appearance)}</div>` : ''}
-            <div class="nova-inf-sub">資源：${esc(c.resource)}</div>
             <div class="nova-inf-row">${delBtn('cast', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
 
