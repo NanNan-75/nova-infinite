@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.7.3
+// Nova 無限流面板 v0.8.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -78,6 +78,9 @@ function defaultSettings() {
         pendingSeed: null,
         playerProfile: '',
         floatBall: true,
+        continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
+        hideOld: true,          // 進入下一個副本時隱藏前面的訊息
+        lastMain: null,         // 最近一個主線的男主，用於支線與防重疊
         floatPos: null,
         phone: { contacts: [], cost: 1, history_limit: 30 },
         bannedWords: '鐘錶,懷表,懷錶,時鐘機關,塔羅,占卜牌,筆記本,髮夾,蠑螈,果園,西瓜,樂高,積木,冰塊,挑染,大型犬,狗狗公園,黃金獵犬,玻璃屋,熱牛奶,黑色鵝卵石,白色小熊,北海道,K.E,ZENITH,Luka,Yul,Lunar Ash,耳廓狐,黑豹,垂耳兔,柴犬,邊牧,柯基,博美',
@@ -255,6 +258,11 @@ function applyOpen(obj) {
     inst.daily_life = (obj.daily_life || []).map(normLife);
     cs.instance = inst;
     cs.mode = 'instance';
+    if (!String(inst.line_type || '').includes('支線')) {
+        const banned = lastMainNames().filter(n => S().lastMain?.instance_id !== inst.id);
+        const clash = inst.cast.map(c => c.real_name).filter(n => n && banned.includes(n));
+        if (clash.length) setTimeout(() => toast(`這個主線的男主和上一個主線重疊（${peek ? clash.join('、') : clash.length + ' 位'}），建議重新生成開局`, 'warning'), 600);
+    }
     return `副本「${inst.name || '未命名'}」已建立`;
 }
 
@@ -474,6 +482,12 @@ function endInstance(end) {
     }
     // 僅限本副本的道具在離開時消失
     s.inventory.items = s.inventory.items.filter(it => !(it.instance_id === inst.id && it.carry_rule === '僅限本副本'));
+    if (!String(inst.line_type || '').includes('支線')) {
+        s.lastMain = {
+            instance_id: inst.id, name: inst.name, worldline: inst.worldline,
+            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length })),
+        };
+    }
     const added = makeContacts(inst, end);
     if (added) setTimeout(() => toast(`📱 通訊器多了 ${added} 位聯絡人`, 'success'), 600);
     cs.mode = 'settle';
@@ -489,6 +503,32 @@ function fmtDays(n) {
     const m = Math.floor((n % 365) / 30);
     const d = (n % 365) % 30;
     return [y ? `${y} 年` : '', m ? `${m} 個月` : '', d ? `${d} 天` : ''].filter(Boolean).join(' ');
+}
+
+// 最近一個主線出場的男主（下一個主線不得重疊）
+function lastMainNames() {
+    const s = S();
+    if (s.lastMain?.cast?.length) return s.lastMain.cast.map(c => c.real_name || c.codename).filter(Boolean);
+    const l = [...s.ledger].reverse().find(x => !String(x.line_type || '').includes('支線'));
+    return (l?.cast_categories || []).map(c => c.real_name || c.codename).filter(Boolean);
+}
+
+function exclusionText() {
+    const names = lastMainNames();
+    if (!names.length) return '';
+    return `\n【封存｜下一個主線的卡司限制】上一個主線出場的男主：${names.join('、')}。若本次是主線副本，卡司不得包含他們（支線不受此限）。不得向玩家說明這條限制。\n`;
+}
+
+function sideText(src) {
+    if (!src) return '';
+    const lm = src.from || {};
+    let t = `\n【封存｜支線】這是上一個主線《${lm.name || ''}》男主的過去。\n`;
+    t += src.target ? `支線對象：${src.target}\n` : '支線對象：由你從下列男主中選一位\n';
+    (lm.cast || []).forEach(c => {
+        t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
+    });
+    t += '依〈主線與支線的時間〉：支線發生在他的過去，世界與她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
+    return t;
 }
 
 function line(label, value) {
@@ -530,6 +570,11 @@ function buildStateText() {
         if (s.glossary_global.length) t += '白域通用詞彙：\n' + s.glossary_global.map(g => `- ${g.term}：${g.desc}`).join('\n') + '\n';
         t += '最近三個副本（防重複對照）：\n' + recentText();
         t += worldlineSealedText();
+        if (cs.next?.kind === 'side') {
+            t += '\n【本次只提供支線選項】玩家選擇先進入上一個主線男主的過去。提供 2–3 個支線選項，line_type 一律填「支線」。\n' + sideText(cs.next);
+        } else {
+            t += exclusionText();
+        }
         if (cs.options?.length) {
             t += '\n【目前提供給玩家的副本選項】（玩家選擇時以此編號回報）\n' +
                 cs.options.map((o, i) => `${i + 1}. ${o.name}｜${o.hook || ''}［${o.hook_type || ''}］｜${o.difficulty}｜${o.type}/${o.world_type}/${o.mechanic || '無'}`).join('\n') + '\n';
@@ -549,6 +594,8 @@ function buildStateText() {
         if (sd.name || sd.type) t += '※ 以上標示「已選定」的項目是玩家在白域大廳選好的副本，開局資料必須沿用，不得更改。\n';
         if (s.playerProfile?.trim()) t += '\n【玩家本人檔案】（{{user}} 本人的能力、體質、習慣與禁忌，不因身份卡改變；生成身份卡時需考慮與此的落差）\n' + s.playerProfile.trim() + '\n';
         t += '最近三個副本（防重複對照，三軸與男主身份類別不得重複）：\n' + recentText();
+        if (sd.side) t += sideText(sd.side);
+        else if (!String(sd.line_type || '').includes('支線')) t += exclusionText();
         t += worldlineSealedText();
         t += '\n' + OPEN_TAG_SPEC + '\n';
         return t;
@@ -854,6 +901,7 @@ function optionToSeed(o) {
         name: o.name || '', world: o.hook || '', hook_type: o.hook_type || '', difficulty: o.difficulty || '', line_type: o.line_type || '',
         type: o.type || '', world_type: o.world_type || '', mechanic: o.mechanic || '',
         duration: o.duration || '', reward: o.reward || '', from_worldline: o.worldline || '',
+        side: C()?.next?.kind === 'side' ? clone(C().next) : null,
     };
 }
 
@@ -862,7 +910,18 @@ function pickOption(idx) {
     const s = S();
     const o = cs.options?.[idx];
     if (!o) return '';
-    s.pendingSeed = optionToSeed(o);
+    const seed = optionToSeed(o);
+    if (s.continueMode !== 'new') {
+        cs.mode = 'opening';
+        cs.seed = seed;
+        cs.instance = null;
+        cs.options = [];
+        cs.next = null;
+        cs.lock = false;
+        saveSettings();
+        return `已選定「${o.name}」：在這個聊天送出下一則訊息，就會開始副本`;
+    }
+    s.pendingSeed = seed;
     saveSettings();
     return `已選定「${o.name}」：開一個新聊天就會自動進入副本開局`;
 }
@@ -882,6 +941,34 @@ function applyPendingSeed() {
     saveChatState();
     toast(`已進入副本開局：${cs.seed.name || ''}。可以在面板補充種子卡，然後送出第一則訊息。`, 'success');
     return true;
+}
+
+// 隱藏到目前為止的訊息（AI 看不到，畫面上還在）
+async function hideOldMessages() {
+    const c = ctx();
+    const last = (c.chat?.length || 0) - 1;
+    if (last < 0) return;
+    const cmd = `/hide 0-${last}`;
+    try {
+        if (typeof c.executeSlashCommandsWithOptions === 'function') { await c.executeSlashCommandsWithOptions(cmd); return; }
+        if (typeof c.executeSlashCommands === 'function') { await c.executeSlashCommands(cmd); return; }
+    } catch (e) { console.warn('[Nova無限流] 隱藏訊息失敗', e); }
+    c.chat.forEach(m => { m.is_system = true; });
+    try { await c.saveChat?.(); } catch (e) { /* 忽略 */ }
+}
+
+// 結算後在同一個聊天前往下一步
+async function goNext(next) {
+    const s = S();
+    const cs = C();
+    if (s.hideOld) await hideOldMessages();
+    cs.next = next;
+    cs.instance = null;
+    cs.options = [];
+    cs.lock = false;
+    cs.mode = 'lobby';
+    commit();
+    toast(next.kind === 'side' ? '回到白域大廳：請無語列出支線選項' : '回到白域大廳：請無語列出下一個主線', 'success');
 }
 
 // 清掉這個聊天的副本與快照，換到指定模式
@@ -1379,11 +1466,12 @@ function renderOverview() {
                 '在新聊天送出第一則訊息，副本就開始了。',
             ], btn('pending_here', '改成直接在這個聊天開局') + btn('pending_cancel', '取消選擇', '', 'danger'));
         } else {
-            h += guide('現在要做什麼', [
-                '跟無語聊天，請牠列出副本選項。',
+            h += guide(cs.next?.kind === 'side' ? '現在要做什麼（支線）' : '現在要做什麼', [
+                cs.next?.kind === 'side' ? '跟無語聊天，請牠列出支線選項。' : '跟無語聊天，請牠列出副本選項。',
                 cs.options?.length ? '選一個副本：在劇情裡告訴無語，或按下方卡片的「選這個」。' : '無語列出選項後，下方會出現副本卡片。',
-                '選定後開一個新聊天，插件會自動開局。',
+                s.continueMode === 'new' ? '選定後開一個新聊天，插件會自動開局。' : '選定後在這個聊天送出下一則訊息，就會開局。',
             ]);
+            if (cs.next?.kind === 'side') h += `<div class="nova-inf-row">${btn('next_cancel_side', '改成前往下一個主線')}</div>`;
         }
         h += card('白域狀態', `<p>碎片 <b>${s.inventory.shards || 0}</b>　已通關 <b>${s.ledger.length}</b></p>`);
         if (cs.options?.length) {
@@ -1463,9 +1551,18 @@ function renderOverview() {
         h += guide('副本結束了', [
             '讓劇情跑完結算場景（無語會統計獎勵）。',
             '想許現實願望的話，到「背包」分頁按「＋ 許願」記下來。',
-            '準備好了就回到白域大廳，選下一個副本。',
-        ], btn('to_lobby', '回到白域大廳', '', 'primary') + btn('new_instance', '在這個聊天開新副本'));
+            '在下方選擇下一步，可以直接在這個聊天繼續。',
+        ]);
         if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>`);
+        const lm = s.lastMain;
+        const sideBtns = (lm?.cast || []).map(c =>
+            btn('next_side', `看「${esc(c.revealed || peek ? (c.real_name || c.codename) : c.codename)}」的過去`, `data-c="${esc(c.codename)}"`)).join('');
+        h += card('下一步', `
+            ${lm ? `<p class="nova-inf-sub">支線：上一個主線《${esc(lm.name)}》男主的過去</p>
+            <div class="nova-inf-row">${sideBtns}${btn('next_side', '交給 AI 選', 'data-c=""')}</div>` : ''}
+            <p class="nova-inf-sub" style="margin-top:10px">主線：不看支線，直接前往下一個主線（不會和上一個主線的男主重疊）</p>
+            <div class="nova-inf-row">${btn('next_main', '前往下一個主線', '', 'primary')}</div>
+            <p class="nova-inf-hint">${s.hideOld ? '繼續時，前面的訊息會被隱藏（AI 看不到，畫面上還在），避免舊副本混進新副本。' : '前面的訊息不會被隱藏，AI 仍看得到舊副本的內容。'}想換新聊天也可以：開新聊天後在總覽按「進入白域大廳」。</p>`);
     }
     return h;
 }
@@ -1476,10 +1573,10 @@ function renderHelp() {
         <ol class="nova-inf-ol">
             <li><b>白域大廳</b>：開一個聊天，在「總覽」按「進入白域大廳」。跟無語聊天，牠會列出副本選項。</li>
             <li><b>選副本</b>：在劇情裡告訴無語你選哪個，或按副本卡片上的「選這個」。</li>
-            <li><b>開新聊天</b>：一個副本一個聊天。開新聊天後，插件會自動進入「副本開局」。</li>
+            <li><b>開局</b>：選定後在同一個聊天送出下一則訊息就會開局（也可以在設定改成開新聊天）。</li>
             <li><b>送出第一則訊息</b>：AI 會生成副本並在背後回報資料，面板自動切到「副本進行中」。</li>
             <li><b>正常玩</b>：每次 AI 回覆，右上角會跳出提示，告訴你哪裡更新了。</li>
-            <li><b>結算</b>：副本結束時自動寫進帳本，回到白域大廳選下一個。</li>
+            <li><b>結算</b>：副本結束時自動寫進帳本。主線結束後，可以先看某位男主的過去（支線），或直接前往下一個主線；下一個主線不會和上一個主線的男主重疊。</li>
         </ol>`) +
     sec('每個分頁做什麼', `
         <ul class="nova-inf-ol">
@@ -1757,6 +1854,13 @@ function renderSettingsTab() {
         <label class="nova-inf-label"><input type="checkbox" data-set="floatBall" ${s.floatBall !== false ? 'checked' : ''}> 顯示浮球</label>
         <p class="nova-inf-hint">點一下打開或關閉面板，按住可以拖到任何位置。關掉浮球後，仍可從魔杖選單打開。</p>
         <div class="nova-inf-row">${btn('ball_reset', '浮球回到預設位置')}</div>`) +
+        card('副本銜接', `
+        <label class="nova-inf-label">選定副本之後
+            <select class="nova-inf-input" data-set="continueMode">
+                <option value="same" ${s.continueMode !== 'new' ? 'selected' : ''}>在同一個聊天繼續</option>
+                <option value="new" ${s.continueMode === 'new' ? 'selected' : ''}>開新聊天</option>
+            </select></label>
+        <label class="nova-inf-label"><input type="checkbox" data-set="hideOld" ${s.hideOld ? 'checked' : ''}> 結算後前往下一步時，隱藏前面的訊息（AI 看不到，畫面上還在）</label>`) +
         card('插件設定', `
         <label class="nova-inf-label"><input type="checkbox" data-set="enabled" ${s.enabled ? 'checked' : ''}> 啟用插件</label>
         <label class="nova-inf-label">規則放置位置
@@ -1950,6 +2054,14 @@ function onBodyClick(ev) {
             break;
         }
         case 'to_lobby': cs.mode = 'lobby'; commit(); break;
+        case 'next_side': {
+            const lm = s.lastMain;
+            const c = lm?.cast?.find(x => x.codename === b.dataset.c);
+            goNext({ kind: 'side', target: c ? `${c.codename}${c.real_name ? `（${c.real_name}）` : ''}` : '', from: clone(lm) });
+            break;
+        }
+        case 'next_main': goNext({ kind: 'main' }); break;
+        case 'next_cancel_side': cs.next = { kind: 'main' }; cs.options = []; commit(); break;
         case 'lock': cs.lock = !cs.lock; commit(); break;
         case 'day_plus': if (inst) { inst.calendar.day = (inst.calendar.day || 1) + 1; commit(); } break;
         case 'prog_plus': if (inst) { inst.act_progress = Math.min(100, inst.act_progress + 5); commit(); } break;
