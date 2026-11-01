@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.9.2
+// Nova 無限流面板 v0.9.3
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -140,6 +140,7 @@ function blankInstance() {
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
         glossary: [], concessions: [], threads: [],
         era: { tech_level: '', anachronism: '' },
+        world_change: { what: '', before: '', cause: '' },
         map: { regions: [] }, location: '',
         daily_life: [],
         ended: false,
@@ -256,6 +257,7 @@ function applyOpen(obj) {
     }
     inst.glossary = (obj.glossary || []).map(g => ({ term: g.term || '', desc: g.desc || '', revealed: true }));
     if (obj.era) inst.era = Object.assign(inst.era, obj.era);
+    if (obj.world_change) inst.world_change = Object.assign({ what: '', before: '', cause: '' }, obj.world_change);
     inst.map.regions = (obj.map?.regions || []).map(normRegion);
     inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
     inst.daily_life = (obj.daily_life || []).map(normLife);
@@ -496,6 +498,8 @@ function endInstance(end) {
     if (!String(inst.line_type || '').includes('支線')) {
         s.lastMain = {
             instance_id: inst.id, name: inst.name, worldline: inst.worldline,
+            world: inst.axes?.world || '', era: clone(inst.era), world_change: clone(inst.world_change || {}),
+            regions: (inst.map?.regions || []).map(r => r.name).filter(Boolean),
             cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark })),
         };
     }
@@ -534,13 +538,19 @@ function sideText(src) {
     if (!src) return '';
     const lm = src.from || {};
     let t = `\n【封存｜支線】這是上一個主線《${lm.name || ''}》男主的過去。\n`;
+    t += `支線發生在同一個世界（${lm.world || '同主線'}）崩壞或改變之前，也就是這個世界原本的樣子。世界線類型沿用主線，不另外抽籤；地名、勢力、風俗可以是主線中那些東西「還沒變質之前」的模樣。\n`;
+    const wc = lm.world_change || {};
+    if (wc.before) t += `崩壞之前的世界：${wc.before}\n`;
+    if (wc.what) t += `主線中的現狀（支線要埋下通往這裡的種子，不得提前發生）：${wc.what}\n`;
+    if (wc.cause) t += `崩壞的真正起因：${wc.cause}\n`;
+    if (lm.regions?.length) t += `主線中出現過的地區：${lm.regions.join('、')}\n`;
     t += src.target ? `支線對象：${src.target}\n` : '支線對象：由你從下列男主中選一位\n';
     (lm.cast || []).forEach(c => {
         t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
         if (c.aftermath) t += `  她消失後他做的事（支線的結局必須能通向這裡）：${c.aftermath}\n`;
     });
     t += '支線中男主可以死亡；若主線中他的處境來自死亡或異變（化為非人、被詛咒、墮落、成為傳說），支線就要寫到那一步的起點。\n';
-    t += '依〈主線與支線的時間〉：支線發生在他的過去，世界與她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
+    t += '依〈主線與支線的時間〉：支線發生在他的過去，她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
     return t;
 }
 
@@ -563,13 +573,14 @@ function ensureRolled() {
     const s = S();
     const cs = C();
     if (!cs || cs.mode !== 'lobby' || !s.rollWorlds || cs.options?.length) return;
+    if (cs.next?.kind === 'side') { cs.rolled = []; return; }
     const n = Math.min(8, Math.max(1, Number(s.rollCount) || 3));
     if (!Array.isArray(cs.rolled) || cs.rolled.length !== n) cs.rolled = rollWorlds(n);
 }
 
 function rolledText() {
     const cs = C();
-    if (!S().rollWorlds || !cs?.rolled?.length || cs.options?.length) return '';
+    if (!S().rollWorlds || !cs?.rolled?.length || cs.options?.length || cs.next?.kind === 'side') return '';
     return `\n【本批選項的世界線｜插件抽籤，必須依序使用；選項數量等於抽到的數量】\n${cs.rolled.map((w, i) => `${i + 1}. ${w}`).join('\n')}\n每個選項的主世界線必須是抽到的那一個，可以混搭一個次要元素，但不得換掉主世界線，也不得全部回到同一種場所（鐘樓、溫室、旅館、圖書館、劇院）。\n`;
 }
 
@@ -661,6 +672,17 @@ function buildStateText() {
     if (inst.hook) t += `主線任務：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
+    const wc = inst.world_change || {};
+    if (wc.what || wc.before) {
+        if (String(inst.line_type || '').includes('支線')) {
+            t += `世界的現在（崩壞之前）：${wc.before || ''}\n`;
+            if (wc.what) t += `【封存】這個世界日後會變成：${wc.what}。支線中只埋下種子，不得讓崩壞提前發生。\n`;
+        } else {
+            t += `世界的現狀（崩壞或重大改變之後）：${wc.what || ''}\n`;
+            if (wc.before) t += `居民記得的「從前」：${wc.before}\n`;
+            if (wc.cause) t += `【封存】崩壞的真正起因：${wc.cause}\n`;
+        }
+    }
     t += `時間：${cal.calendar_name || ''} ${cal.date_label || ''} ${cal.time_label || ''}｜副本第 ${cal.day || 1} 天（已在副本中生活 ${fmtDays((cal.day || 1) - 1)}）`;
     if (inst.time_limit_days) {
         const remain = inst.time_limit_days - (cal.day || 1);
@@ -1578,7 +1600,7 @@ function renderOverview() {
             if (cs.next?.kind === 'side') h += `<div class="nova-inf-row">${btn('next_cancel_side', '改成前往下一個主線')}</div>`;
         }
         h += card('白域狀態', `<p>碎片 <b>${s.inventory.shards || 0}</b>　已通關 <b>${s.ledger.length}</b></p>`);
-        if (s.rollWorlds && !cs.options?.length) {
+        if (s.rollWorlds && !cs.options?.length && cs.next?.kind !== 'side') {
             ensureRolled();
             h += card('🎲 這一批的世界線', `
                 <p>${(cs.rolled || []).map(w => `<span class="nova-inf-chip">${esc(w)}</span>`).join('　')}</p>

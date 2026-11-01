@@ -411,6 +411,11 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
   "calendar": {"calendar_name": "曆法名稱", "date_label": "當前日期", "time_label": "時段",
      "events": [{"id": "e1", "day": 5, "title": "事件", "sealed": true}]},
   "glossary": [{"term": "名詞", "desc": "解釋"}],
+  "world_change": {
+    "what": "主線：這個世界發生了什麼崩壞或重大改變，現在是什麼樣子（玩家可見）。支線：沿用主線的內容，表示這個世界日後會變成的樣子",
+    "before": "崩壞或改變之前，這個世界原本的樣子（主線中是居民記得的從前；支線中就是現在）",
+    "cause": "【封存】崩壞的真正起因，多半與男主在她消失後做的事有關"
+  },
   "era": {
     "tech_level": "這個世界的技術與生活水準，一兩句話",
     "anachronism": "若有不符合時代的便利設施，說明為什麼存在；沒有就留空"
