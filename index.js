@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.17.1
+// Nova 無限流面板 v0.17.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -28,7 +28,10 @@ const SEALED_THREAD_KEYS = ['target'];
 
 let peek = false;          // 本次開啟期間是否解鎖封存（不存檔）
 let currentTab = 'overview';
-let openRuleId = null;     // 規則分頁中展開中的那一條，重繪後保持展開
+let openRuleId = null;
+let batchMode = false;          // 規則分頁：批次整理模式
+const batchSel = new Set();     // 批次模式中勾選的規則 id
+let dragRuleId = null;          // 拖曳中的規則     // 規則分頁中展開中的那一條，重繪後保持展開
 let updateMessageBlockFn = null;
 
 // ───────────────────────── 基礎工具 ─────────────────────────
@@ -1027,6 +1030,18 @@ function buildStateText() {
     return t;
 }
 
+// 把規則移到資料夾的最後面
+function moveRuleToFolder(ruleId, folderId) {
+    const s = S();
+    const i = s.rules.findIndex(r => r.id === ruleId);
+    if (i < 0) return;
+    const [r] = s.rules.splice(i, 1);
+    r.folder = folderId || '';
+    let last = -1;
+    s.rules.forEach((x, k) => { if ((x.folder || '') === r.folder) last = k; });
+    s.rules.splice(last + 1, 0, r);
+}
+
 // 送出順序：先依資料夾順序（未分類在最後），同資料夾內依規則順序
 function orderedRules() {
     const s = S();
@@ -1971,6 +1986,34 @@ function ensurePanel() {
     });
     document.getElementById('nova_inf_body').addEventListener('click', onBodyClick);
     document.getElementById('nova_inf_body').addEventListener('change', onBodyChange);
+    const bodyEl = document.getElementById('nova_inf_body');
+    bodyEl.addEventListener('dragstart', ev => {
+        const h = ev.target.closest?.('[data-drag-rule]');
+        if (!h) return;
+        dragRuleId = h.dataset.dragRule;
+        try { ev.dataTransfer.setData('text/plain', dragRuleId); ev.dataTransfer.effectAllowed = 'move'; } catch (e) { /* 忽略 */ }
+    });
+    bodyEl.addEventListener('dragover', ev => {
+        const f = ev.target.closest?.('details[data-folder-id]');
+        if (!f || !dragRuleId) return;
+        ev.preventDefault();
+        bodyEl.querySelectorAll('.nova-drop').forEach(x => x !== f && x.classList.remove('nova-drop'));
+        f.classList.add('nova-drop');
+    });
+    bodyEl.addEventListener('dragleave', ev => {
+        const f = ev.target.closest?.('details[data-folder-id]');
+        if (f && !f.contains(ev.relatedTarget)) f.classList.remove('nova-drop');
+    });
+    bodyEl.addEventListener('drop', ev => {
+        const f = ev.target.closest?.('details[data-folder-id]');
+        if (!f || !dragRuleId) return;
+        ev.preventDefault();
+        const fid = f.dataset.folderId === '_unfiled' ? '' : f.dataset.folderId;
+        moveRuleToFolder(dragRuleId, fid);
+        dragRuleId = null;
+        commit();
+    });
+    bodyEl.addEventListener('dragend', () => { dragRuleId = null; bodyEl.querySelectorAll('.nova-drop').forEach(x => x.classList.remove('nova-drop')); });
     document.getElementById('nova_inf_body').addEventListener('input', ev => { if (ev.target.id === 'nova_phone_input') phoneDraft = ev.target.value; });
     document.getElementById('nova_inf_body').addEventListener('keydown', ev => {
         if (ev.target.id === 'nova_phone_input' && ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && phoneView) {
@@ -2518,7 +2561,7 @@ function ruleCard(r, i) {
     const s = S();
     return `
         <details class="nova-inf-card" ${openRuleId === r.id ? 'open' : ''} data-rule-id="${esc(r.id)}">
-            <summary><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
+            <summary draggable="true" data-drag-rule="${esc(r.id)}" title="可以拖到其他資料夾"><span class="nova-drag-handle">⠿</span><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
                 <span class="nova-inf-chip nova-prio-${r.priority || 'normal'}">${PRIORITIES[r.priority || 'normal']}</span>
                 ${r.custom ? '<span class="nova-inf-chip">自訂</span>' : ''}
                 <span class="nova-inf-sub">${(r.modes || []).map(m => RULE_MODES[m] || m).join('、') || '未指定模式（不會送出）'}</span></summary>
@@ -2549,6 +2592,14 @@ function ruleCard(r, i) {
         </details>`;
 }
 
+function batchRow(r) {
+    return `<label class="nova-batch-row ${batchSel.has(r.id) ? 'on' : ''}">
+        <input type="checkbox" data-batch-id="${esc(r.id)}" ${batchSel.has(r.id) ? 'checked' : ''}>
+        <b>${esc(r.title)}</b>
+        <span class="nova-inf-sub">${(r.modes || []).map(m => RULE_MODES[m] || m).join('、')}</span>
+    </label>`;
+}
+
 function renderRules() {
     const s = S();
     const missing = DEFAULT_RULES.filter(d => !s.rules.find(r => r.id === d.id)).length;
@@ -2574,7 +2625,8 @@ function renderRules() {
                 ${btn('folder_up', '↑', `data-fi="${fi}"`)}${btn('folder_down', '↓', `data-fi="${fi}"`)}
                 ${btn('folder_del', '🗑 刪除資料夾', `data-fi="${fi}"`, 'danger')}
             </div>`}
-            ${items.map(([r, i]) => ruleCard(r, i)).join('') || '<p class="nova-inf-empty">這個資料夾沒有符合篩選的規則</p>'}
+            ${batchMode && items.length ? `<div class="nova-inf-row">${btn('batch_all', '全選這個資料夾', `data-folder="${esc(fd.id)}"`)}</div>` : ''}
+            ${items.map(([r, i]) => batchMode ? batchRow(r) : ruleCard(r, i)).join('') || '<p class="nova-inf-empty">這個資料夾沒有符合篩選的規則</p>'}
         </details>`;
     };
     return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI。送出順序：同一個權重內，先依資料夾的順序，再依資料夾裡規則的順序。關閉資料夾，裡面的規則全部不會送出。</p>
@@ -2587,12 +2639,22 @@ function renderRules() {
                 <li><b>參考</b>：放在一般規則的後面，標明「衝突時以上方為準」。適合細節、範例、補充。</li>
             </ol>
         </details>
-        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則', '', 'primary')}${btn('folder_add', '＋ 新增資料夾')}
+        <div class="nova-inf-row">${batchMode ? '' : btn('rule_add', '＋ 新增規則', '', 'primary')}${btn('folder_add', '＋ 新增資料夾')}
+            ${btn('batch_toggle', batchMode ? '✓ 完成整理' : '📦 整理規則', '', batchMode ? 'primary' : '')}
             <select class="nova-inf-input" style="width:auto" data-rule-filter="1">
                 <option value="all" ${f === 'all' ? 'selected' : ''}>顯示全部</option>
                 ${Object.entries(RULE_MODES).map(([k, v]) => `<option value="${k}" ${f === k ? 'selected' : ''}>只看「${v}」會送出的</option>`).join('')}
             </select></div>
         ${modeLen ? `<p class="nova-inf-sub">這個模式送出的字數：核心 ${modeLen[0][1]}｜一般 ${modeLen[1][1]}｜參考 ${modeLen[2][1]}</p>` : ''}` +
+        (batchMode ? `<div class="nova-batch-bar">
+            <span>已選 <b>${batchSel.size}</b> 條</span>
+            <select class="nova-inf-input" id="nova_batch_target" style="width:auto">
+                <option value="">未分類</option>
+                ${(s.folders || []).map(fd => `<option value="${esc(fd.id)}">${esc(fd.name)}</option>`).join('')}
+            </select>
+            ${btn('batch_move', '移過去', batchSel.size ? '' : 'disabled', 'primary')}
+            ${btn('batch_clear', '取消選取')}
+        </div>` : '<p class="nova-inf-hint">電腦上可以按住規則標題（⠿）直接拖到另一個資料夾。手機請用「📦 整理規則」。</p>') +
         groups.map((fd, fi) => folderBlock(fd, fi)).join('') +
         `<div class="nova-inf-row">
             ${missing ? btn('rules_restore_missing', `補回被刪掉的預設規則（${missing} 條）`) : ''}
@@ -2960,6 +3022,19 @@ function onBodyClick(ev) {
             DEFAULT_RULES.forEach(d => { if (!s.rules.find(r => r.id === d.id)) s.rules.push(clone(d)); });
             commit();
             break;
+        case 'batch_toggle': batchMode = !batchMode; batchSel.clear(); renderPanel(); break;
+        case 'batch_clear': batchSel.clear(); renderPanel(); break;
+        case 'batch_all': s.rules.filter(r => (r.folder || '') === (b.dataset.folder || '') || (!b.dataset.folder && !s.folders.find(f => f.id === r.folder))).forEach(r => batchSel.add(r.id)); renderPanel(); break;
+        case 'batch_move': {
+            const target = document.getElementById('nova_batch_target')?.value || '';
+            const ids = orderedRules().filter(r => batchSel.has(r.id)).map(r => r.id);
+            ids.forEach(id => moveRuleToFolder(id, target));
+            const name = (s.folders.find(f => f.id === target) || { name: '未分類' }).name;
+            toast(`已把 ${ids.length} 條規則移到「${name}」`, 'success');
+            batchSel.clear();
+            commit();
+            break;
+        }
         case 'folder_add': {
             const name = prompt('資料夾名稱', '新資料夾');
             if (!name) break;
@@ -3134,6 +3209,7 @@ function onBodyChange(ev) {
     if (t.dataset.ruleText !== undefined) { const r = s.rules[Number(t.dataset.ruleText)]; r.content = t.value; openRuleId = r.id; saveSettings(); updateInjection(); return; }
     if (t.dataset.rulePrio !== undefined) { const r = s.rules[Number(t.dataset.rulePrio)]; r.priority = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
     if (t.dataset.ruleFolder !== undefined) { const r = s.rules[Number(t.dataset.ruleFolder)]; r.folder = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
+    if (t.dataset.batchId !== undefined) { if (t.checked) batchSel.add(t.dataset.batchId); else batchSel.delete(t.dataset.batchId); renderPanel(); return; }
     if (t.dataset.folderDesc !== undefined) { const fd = s.folders[Number(t.dataset.folderDesc)]; if (fd) { fd.desc = t.value.trim(); saveSettings(); updateInjection(); } return; }
     if (t.dataset.folderOn !== undefined) { const fd = s.folders[Number(t.dataset.folderOn)]; if (fd) { fd.enabled = t.checked; saveSettings(); updateInjection(); renderPanel(); } return; }
     if (t.dataset.ruleFilter) { s.ruleFilter = t.value; saveSettings(); renderPanel(); return; }

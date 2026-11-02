@@ -449,3 +449,10 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 .nova-folder > summary { cursor: pointer; list-style: none; padding: 4px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .nova-folder > summary::-webkit-details-marker { display: none; }
 .nova-folder > .nova-inf-card { margin-left: 4px; }
+
+/* ───── v0.17.2 拖曳與批次整理 ───── */
+.nova-drag-handle { cursor: grab; opacity: 0.4; margin-right: 4px; user-select: none; }
+.nova-folder.nova-drop { outline: 2px dashed var(--SmartThemeQuoteColor, #8ab4f8); outline-offset: 2px; background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 10%, transparent); }
+.nova-batch-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-top: 1px dashed var(--SmartThemeBorderColor, #444); cursor: pointer; flex-wrap: wrap; }
+.nova-batch-row.on { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 14%, transparent); border-radius: 6px; }
+.nova-batch-bar { position: sticky; top: -10px; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; margin: 8px 0; border-radius: 10px; background: var(--SmartThemeBlurTintColor, #1b1d23); border: 1px solid var(--SmartThemeQuoteColor, #8ab4f8); }
