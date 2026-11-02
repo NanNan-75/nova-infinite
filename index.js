@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.1
+// Nova 無限流面板 v0.19.2
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -21,7 +21,7 @@ const MODES = {
 const RULE_MODES = { lobby: '白域大廳', opening: '副本開局', instance: '副本進行中', settle: '結算', phone: '通訊器' };
 
 const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage',
-    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary', 'balance', 'balance_type', 'balance_log', 'dark_origin', 'habits', 'courtship'];
+    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary', 'balance', 'balance_type', 'balance_log', 'dark_origin', 'habits', 'courtship', 'wound'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
 const SEALED_FACTION_KEYS = ['true_goal', 'related'];
 const SEALED_THREAD_KEYS = ['target'];
@@ -933,6 +933,7 @@ function buildStateText() {
             if (c.inner_circle?.length) t += `  身邊的人：${c.inner_circle.map(p => `${p.name}｜${p.relation}｜對她：${p.attitude_to_her}`).join('；')}（他們與他的關係在她眼中${c.cover && !c.unmasked ? '尚未揭露' : '可見'}）\n`;
             if (c.anniversary?.label) t += `  【封存】他的紀念日：副本第 ${c.anniversary.day} 天｜${c.anniversary.label}\n`;
             if (c.courtship) t += `  他追求她的方式：${c.courtship}\n`;
+            if (c.wound) t += `  【封存】他成長中的傷：${c.wound}\n`;
             if (c.habits) {
                 const hb = c.habits;
                 t += `  這個世界的他的習慣（取代偶像世界的一切習慣與興趣）：興趣：${hb.hobby || ''}｜小動作：${(hb.quirks || []).join('、')}｜心煩時：${hb.comfort || ''}｜偏好：${hb.taste || ''}\n`;
@@ -1455,6 +1456,7 @@ function applyDossier(arr) {
         if (d.dark_origin?.type) c.dark_origin = d.dark_origin;
         if (d.habits && typeof d.habits === 'object') c.habits = d.habits;
         if (d.courtship) c.courtship = d.courtship;
+        if (d.wound) c.wound = d.wound;
         if (d.short_goal) c.short_goal_act = inst.current_act || 1;
         if (d.anniversary?.label) {
             c.anniversary = d.anniversary;
@@ -1479,6 +1481,7 @@ const DOSSIER_SPEC = `<inf_dossier>
     "enemies": [{"name": "仇人或對手（NPC、勢力，或其他男主的代號）", "reason": "結怨的原因", "status": "目前的狀態：明爭、暗鬥、休戰、單方面追殺"}],
     "inner_circle": [{"name": "心腹、下屬、家人、師父、寵物等", "relation": "與他的關係", "attitude_to_her": "這個人會怎麼對待她（依他的心意而定，但這個人不知道原因）"}],
     "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"},
+    "wound": "他在這個世界長大過程中受過的傷：依世界的黑暗面與他的出身而定（例如戰爭孤兒、被拐賣、當過奴隸或童兵、被家族犧牲、在瘟疫或饑荒中失去一切；也可以是加害者那一方的成長）。一兩句，說明這道傷如何塑造了現在的他",
     "courtship": "他重新追求她的方式：在她眼中他們是初識，他得重新讓她喜歡上自己。依性格、身份與權勢設計，具體到做法（送什麼、為她做什麼、怎麼出現在她身邊、怎麼示好或試探）；送禮只是其中一種方式",
     "habits": {"hobby": "他在這個世界的興趣（一到兩項），必須是這個世界真實存在、符合他身份與成長環境的事", "quirks": ["兩三個小習慣或小動作"], "comfort": "他心煩或疲憊時會做的事", "taste": "他偏好的食物、飲品或氣味"},
     "dark_origin": {"type": "B 級以上主線才填：自主黑化／侵蝕之物／詛咒／許願／交易／禁忌", "detail": "他是怎麼走到這一步的（兩三句）", "entity": "若為侵蝕之物：它的樣子、本質、它真正的目的、它承諾他什麼；否則留空", "fusion": "若為侵蝕之物：他與它目前融合到什麼程度；否則留空"},
@@ -1586,7 +1589,9 @@ const WORLD_SPEC = `<inf_world>
   "born_after": "她消失之後才出生或長大的那一代人，對『從前』的看法",
   "third_party": "有誰從這場崩壞中得利，正在推波助瀾",
   "independent_crisis": "一個與男主無關、這個世界本身正在面對的危機",
-  "taboos": ["這個世界現在的禁忌、迷信或新的規矩"]
+  "underworld": [{"name": "黑暗面的群體或產業（人口販子、奴隸市場、走私集團、邪教、黑市、傭兵、腐敗的官署……依世界觀）", "what": "他們做什麼、誰是受害者", "reach": "勢力範圍，與舞台和男主的關係"}],
+  "taboos": ["這個世界現在的禁忌、迷信或新的規矩"],
+  "darkness": ["這個世界結構性的黑暗面：人口販賣、奴隸制、戰爭孤兒、童兵、黑市、邪教、剝削、瘟疫、饑荒、階級壓迫……依世界觀選三到五項，寫出是誰在做、誰在受害"]
 }
 </inf_world>`;
 
@@ -1602,6 +1607,7 @@ async function genWorldFile(manual = false) {
 - 這個世界在男主之外，有它自己的歷史、勢力、經濟、信仰與危機。男主造成的改變，是落在一個本來就在運轉的世界上。
 - 她消失後經過的歲月要有重量：制度改變、新的勢力崛起、一代人長大、人們習慣了崩壞後的生活。
 - 勢力至少一半與男主無關，各有自己的目的；有人從崩壞中得利。
+- 世界有它自己的黑暗面：依世界觀與難度，設計至少一到三個真實運作的黑暗群體或產業（人口販子、奴隸市場、走私、邪教、黑市、腐敗的權力），各有受害者與勢力範圍。
 - 男主在她消失後做的事，有真實的受害者：歲月中要記下那些事件奪走了誰、毀掉了什麼，以及倖存者如今怎麼看待它。
 - 這是一個獨立於地球之外的完整世界：有自己的世界名、多個國家或大洲（星際則是星域、星系、種族政權）、各自的語言與文化。舞台只是其中一角。
 - 沿用開局的版圖（world_scope），不得改名或刪除，只能補充。
@@ -1636,7 +1642,9 @@ function worldFileText(wf, side = false) {
     if (wf.born_after) t += `崩壞後長大的一代：${wf.born_after}\n`;
     if (wf.third_party) t += `從崩壞中得利的人：${wf.third_party}\n`;
     if (wf.independent_crisis) t += `世界自己的危機：${wf.independent_crisis}\n`;
+    if (wf.underworld?.length) t += `世界的黑暗面：${wf.underworld.map(u => `${u.name}（${u.what}${u.reach ? '｜' + u.reach : ''}）`).join('；')}\n`;
     if (wf.taboos?.length) t += `現在的禁忌與規矩：${wf.taboos.join('；')}\n`;
+    if (wf.darkness?.length) t += `世界的黑暗面（依〈世界的黑暗面〉呈現）：${wf.darkness.join('；')}\n`;
     return t;
 }
 
@@ -2451,6 +2459,7 @@ function renderPeople() {
             ${c.enemies?.length ? `<div class="nova-inf-sub">仇人：${c.enemies.map(e => esc(e.name)).join('、')}</div>` : ''}
             ${c.inner_circle?.length ? `<div class="nova-inf-sub">身邊的人：${c.inner_circle.map(p => esc(p.name + '（' + p.relation + '）')).join('、')}</div>` : ''}
             ${c.anniversary?.label ? `<div class="nova-inf-sub">紀念日：第 ${esc(c.anniversary.day)} 天｜${esc(c.anniversary.label)}</div>` : ''}
+            ${c.wound ? `<div class="nova-inf-sub">成長中的傷：${esc(c.wound)}</div>` : ''}
             ${c.courtship ? `<div class="nova-inf-sub">追求方式：${esc(c.courtship)}</div>` : ''}
             ${c.habits ? `<div class="nova-inf-sub">習慣：${esc(c.habits.hobby || '')}｜${esc((c.habits.quirks || []).join('、'))}</div>` : ''}
             ${c.offscreen?.length ? `<div class="nova-inf-sub">幕後：${esc(c.offscreen[c.offscreen.length - 1].progress)}</div>` : ''}
