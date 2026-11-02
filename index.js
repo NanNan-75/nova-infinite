@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.6
+// Nova 無限流面板 v0.19.7
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -298,6 +298,16 @@ function applyOpen(obj) {
     inst.daily_life = (obj.daily_life || []).map(normLife);
     const bl = diffLetter(inst.difficulty);
     if (BALANCE_START[bl] !== undefined) inst.cast.forEach(c => { if (c.role === '主要' && (c.balance === null || c.balance === undefined)) c.balance = BALANCE_START[bl]; });
+    // 從副本中途開始（測試或時間跳躍開局）
+    const st = obj.start_state;
+    if (st && typeof st === 'object') {
+        if (Number(st.day) > 1) inst.calendar.day = Number(st.day);
+        if (Number(st.act) > 1) { const a = Math.min(Number(st.act), inst.total_acts || Number(st.act)); inst.acts.filter(x => x.number < a).forEach(x => { x.done = true; }); inst.current_act = a; }
+        if (Number.isFinite(Number(st.pollution))) inst.pollution = Math.max(0, Math.min(100, Number(st.pollution)));
+        if (st.pollution_source) inst.pollution_source = st.pollution_source;
+        if (st.balance && typeof st.balance === 'object') for (const [k, v] of Object.entries(st.balance)) { const c = inst.cast.find(x => x.codename === k); if (c && Number.isFinite(Number(v))) c.balance = Math.max(-100, Math.min(100, Number(v))); }
+        if (Array.isArray(st.notes)) inst.pollution_notes = st.notes.slice(-12);
+    }
     const carry = S().pollutionCarry;
     if (carry?.value) {
         inst.after_pollution = carry.value;
@@ -3150,7 +3160,7 @@ function onBodyClick(ev) {
         case 'peek_off': peek = false; renderPanel(); break;
 
         case 'edit_basic': if (inst) {
-            const keys = ['name', 'hook', 'hook_type', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status'];
+            const keys = ['name', 'hook', 'hook_type', 'worldline', 'line_type', 'difficulty', 'axes', 'mechanic_revealed', 'time_limit_days', 'total_acts', 'current_act', 'act_progress', 'ending_range', 'status', 'pollution', 'pollution_source'];
             const data = {}; keys.forEach(k => data[k] = inst[k]);
             if (!peek && inst.axes.mechanic && !inst.mechanic_revealed) data.axes = Object.assign({}, inst.axes, { mechanic: '（未揭露，解鎖封存後才可編輯）' });
             openEditor('副本基本資料', data, v => {
