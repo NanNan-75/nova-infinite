@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.5
+// Nova 無限流面板 v0.19.6
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -855,7 +855,7 @@ function buildStateText() {
         if (STATUS_TIERS[tierKey]) t += `\n【她的身份階層｜${sd.status && sd.status !== 'auto' ? '玩家指定' : '插件抽籤'}，必須遵守】${STATUS_TIERS[tierKey][0]}：${STATUS_TIERS[tierKey][1]}。身份卡的 status_tier 填「${STATUS_TIERS[tierKey][0]}」。\n`;
         t += '\n【身份卡要求】她的身份卡從這個世界、主線任務與梗型中長出來，不從玩家本人檔案的專長推導：不得因為她會設計、繪畫、排版、攝影、剪輯，就讓她的身份是畫師、彩繪師、壁畫工、油漆工、抄寫員、設計師這類職業。她的專長是她在任何身份下都帶得走的能力，在劇情中意外派上用場。身份卡不得與最近三個副本的身份卡相近（插件附在上方紀錄中）。\n';
         if (!String(sd.line_type || '').includes('支線') && !sd.side) {
-            t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n';
+            t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n每位主要男主都必須填：cover（偽裝身份）、identity（真實身份，以來歷與做過的事定義）、birthplace（出生與成長之地）、seat（權勢在世界上的來源）、aftermath、world_mark。這些欄位不得省略。\n';
         }
         t += '\n' + OPEN_TAG_SPEC + '\n';
         return t;
@@ -1487,6 +1487,8 @@ function applyDossier(arr) {
         if (d.habits && typeof d.habits === 'object') c.habits = d.habits;
         if (d.courtship) c.courtship = d.courtship;
         if (d.wound) c.wound = d.wound;
+        // 開局資料漏掉的欄位：只補空的，不覆蓋
+        for (const k of ['birthplace', 'seat', 'cover', 'aftermath', 'world_mark']) if (!c[k] && d[k]) c[k] = d[k];
         if (d.short_goal) c.short_goal_act = inst.current_act || 1;
         if (d.anniversary?.label) {
             c.anniversary = d.anniversary;
@@ -1511,6 +1513,7 @@ const DOSSIER_SPEC = `<inf_dossier>
     "enemies": [{"name": "仇人或對手（NPC、勢力，或其他男主的代號）", "reason": "結怨的原因", "status": "目前的狀態：明爭、暗鬥、休戰、單方面追殺"}],
     "inner_circle": [{"name": "心腹、下屬、家人、師父、寵物等", "relation": "與他的關係", "attitude_to_her": "這個人會怎麼對待她（依他的心意而定，但這個人不知道原因）"}],
     "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"},
+    "birthplace": "（僅在開局資料漏掉時填）出生與成長之地", "seat": "（僅在漏掉時填）權勢在世界上的來源", "cover": "（僅在漏掉時填）偽裝身份", "aftermath": "（僅在漏掉時填）她消失後他做的事", "world_mark": "（僅在漏掉時填）這件事留在世界上的痕跡",
     "wound": "他在這個世界長大過程中受過的傷：依世界的黑暗面與他的出身而定（例如戰爭孤兒、被拐賣、當過奴隸或童兵、被家族犧牲、在瘟疫或饑荒中失去一切；也可以是加害者那一方的成長）。一兩句，說明這道傷如何塑造了現在的他",
     "courtship": "他重新追求她的方式：在她眼中他們是初識，他得重新讓她喜歡上自己。依性格、身份與權勢設計，具體到做法（送什麼、為她做什麼、怎麼出現在她身邊、怎麼示好或試探）；送禮只是其中一種方式",
     "habits": {"hobby": "他在這個世界的興趣（一到兩項），必須是這個世界真實存在、符合他身份與成長環境的事", "quirks": ["兩三個小習慣或小動作"], "comfort": "他心煩或疲憊時會做的事", "taste": "他偏好的食物、飲品或氣味"},
@@ -1525,11 +1528,14 @@ async function genDossiers(manual = false, only = null) {
     const inst = cs?.instance;
     if (!inst || !inst.cast.length) { if (manual) toast('目前沒有男主資料', 'warning'); return; }
     const onlyText = only?.length ? `\n只替以下男主建立，其他人已經有了：${only.join('、')}` : '';
+    const isMain = !String(inst.line_type || '').includes('支線');
+    const gaps = isMain ? inst.cast.filter(c => c.role === '主要').map(c => [c.codename, ['birthplace', 'seat', 'cover', 'aftermath', 'world_mark'].filter(k => !c[k])]).filter(x => x[1].length) : [];
+    const gapText = gaps.length ? `\n開局資料漏掉了這些欄位，請一併補上（欄位意義與開局格式相同；已經有的不要改）：${gaps.map(([n, ks]) => `${n}：${ks.join('、')}`).join('；')}。cover 是她在舞台上看到的平凡卻詭異的偽裝身份；birthplace 必須與其他男主分散、不相鄰。` : '';
     const prevMode = cs.mode;
     cs.mode = 'instance';
     const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
     cs.mode = prevMode;
-    const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。${onlyText}
+    const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。${onlyText}${gapText}
 - 目標與仇人要扎根在這個世界的勢力與他的權勢上，並與他在她消失後做的事一致。
 - 男主之間可以互為仇人或對手。
 - 身邊的人是具體的人物，有名字。
@@ -2465,8 +2471,8 @@ function renderPeople() {
     h += card('卡司', inst.cast.map((c, i) => `
         <div class="nova-inf-item">
             ${c.cover && !c.unmasked ? `
-            <div><b>${esc(c.codename)}</b>｜${esc(c.cover)}｜${esc(c.role)}</div>
-            <div class="nova-inf-sub">真實身份：${sealedVal(c.identity)}｜資源：${sealedVal(c.resource)}</div>
+            <div><b>${esc(c.codename)}</b>｜${esc(c.cover)}（偽裝身份）｜${esc(c.role)}</div>
+            <div class="nova-inf-sub">真實身份：${sealedVal(c.identity)}｜資源：${sealedVal(c.resource)}${c.birthplace ? `｜出生地：${sealedVal(c.birthplace)}` : ''}</div>
             ${(c.slips || []).length ? `<div class="nova-inf-sub">你注意到的破綻：${c.slips.map(esc).join('；')}</div>` : ''}` : `
             <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類${c.cover ? `｜<i>原本自稱：${esc(c.cover)}</i>` : ''}</div>
             <div class="nova-inf-sub">資源：${esc(c.resource)}</div>`}
