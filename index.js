@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.3
+// Nova 無限流面板 v0.19.4
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -308,6 +308,8 @@ function applyOpen(obj) {
     cs.instance = inst;
     cs.mode = 'instance';
     if (!String(inst.line_type || '').includes('支線')) {
+        const bp = inst.cast.filter(c => c.role === '主要' && c.birthplace).map(c => String(c.birthplace).split(/[，,、｜|\s（(]/)[0]);
+        if (new Set(bp).size < bp.length) setTimeout(() => toast('有男主的出生地在同一個地區，之後的支線可能會不合理地碰頭。可以考慮重新生成開局，或到人物分頁手動修改。', 'warning'), 900);
         const banned = lastMainNames().filter(n => S().lastMain?.instance_id !== inst.id);
         const clash = inst.cast.map(c => c.real_name).filter(n => n && banned.includes(n));
         if (clash.length) setTimeout(() => toast(`這個主線的男主和上一個主線重疊（${peek ? clash.join('、') : clash.length + ' 位'}），建議重新生成開局`, 'warning'), 600);
@@ -328,7 +330,7 @@ function normCast(c) {
         codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', this_life: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         cover: '', unmasked: false, slips: [],
-        aftermath: '', world_mark: '', mark_seen: false, seat: '',
+        aftermath: '', world_mark: '', mark_seen: false, seat: '', birthplace: '',
         long_goal: '', short_goal: '', short_goal_act: 0, goal_conflict: '', enemies: [], inner_circle: [], anniversary: null, offscreen: [],
         balance: null, balance_type: '', balance_log: [], dark_origin: null, habits: null,
         last_seen_turn: 0,
@@ -613,7 +615,7 @@ function endInstance(end) {
             mechanic: inst.axes?.mechanic || '', hook: inst.hook || '', residue: end.residue || '',
             regions: (inst.map?.regions || []).map(r => r.name).filter(Boolean),
             world_file: clone(inst.world_file), world_scope: clone(inst.world_scope),
-            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark, dark_origin: clone(c.dark_origin) })),
+            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark, dark_origin: clone(c.dark_origin), birthplace: c.birthplace || '' })),
         };
     }
     const added = makeContacts(inst, end);
@@ -717,6 +719,7 @@ function sideText(src) {
     t += src.target ? `支線對象：${src.target}\n` : '支線對象：由你從下列男主中選一位\n';
     (lm.cast || []).forEach(c => {
         t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
+        if (c.birthplace) t += `  出生與成長之地（他的支線發生在這裡）：${c.birthplace}\n`;
         if (c.aftermath) t += `  她消失後他做的事（支線的結局必須能通向這裡）：${c.aftermath}\n`;
         if (c.dark_origin?.type) t += `  他日後的黑化起源：${c.dark_origin.type}｜${c.dark_origin.detail || ''}${c.dark_origin.entity ? `｜侵蝕之物：${c.dark_origin.entity}。支線結尾要埋下它在暗處等著他的伏筆` : ''}\n`;
     });
@@ -925,6 +928,7 @@ function buildStateText() {
             }
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
             if (c.seat) t += `  ${c.cover && !c.unmasked ? '【封存】' : ''}權勢在世界上的來源：${c.seat}\n`;
+            if (c.birthplace) t += `  【封存】出生與成長之地：${c.birthplace}\n`;
             if (c.aftermath) t += `  【封存】她消失後他做的事：${c.aftermath}\n`;
             if (c.long_goal || c.short_goal) {
                 t += `  【封存】長期目標：${c.long_goal || '未定'}｜本幕短期目標：${c.short_goal || '未定'}${(c.short_goal_act || 0) < (inst.current_act || 1) ? '（⚠ 已進入新的一幕，請以 cast_update 更新 short_goal）' : ''}`;
