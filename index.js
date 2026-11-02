@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.0
+// Nova 無限流面板 v0.19.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -1602,6 +1602,7 @@ async function genWorldFile(manual = false) {
 - 這個世界在男主之外，有它自己的歷史、勢力、經濟、信仰與危機。男主造成的改變，是落在一個本來就在運轉的世界上。
 - 她消失後經過的歲月要有重量：制度改變、新的勢力崛起、一代人長大、人們習慣了崩壞後的生活。
 - 勢力至少一半與男主無關，各有自己的目的；有人從崩壞中得利。
+- 男主在她消失後做的事，有真實的受害者：歲月中要記下那些事件奪走了誰、毀掉了什麼，以及倖存者如今怎麼看待它。
 - 這是一個獨立於地球之外的完整世界：有自己的世界名、多個國家或大洲（星際則是星域、星系、種族政權）、各自的語言與文化。舞台只是其中一角。
 - 沿用開局的版圖（world_scope），不得改名或刪除，只能補充。
 - 若為童話改寫，善用原作中較少被提及的地區、人物與設定，擴展原作的世界，而不是只用最有名的地點。
@@ -1844,8 +1845,18 @@ async function customGen(systemPrompt, prompt) {
     return text;
 }
 
+let apiFallbackWarned = false;
 async function genRaw(systemPrompt, prompt, responseLength = null) {
-    if (S().api?.provider && S().api.provider !== 'st') return await customGen(systemPrompt, prompt);
+    const a = S().api || {};
+    if (a.provider && a.provider !== 'st') {
+        const ready = a.key && (a.provider !== 'openai' || a.baseUrl);
+        if (ready) return await customGen(systemPrompt, prompt);
+        // 插件專用 API 沒填完整：改用酒館目前的連線，避免背景生成全部失敗
+        if (!apiFallbackWarned) {
+            apiFallbackWarned = true;
+            toast(`插件專用 API 選了「${a.provider === 'gemini' ? 'Gemini' : 'OpenAI 相容'}」但${a.key ? '沒有填網址' : '沒有填金鑰'}，先改用酒館目前的連線。可以到設定補齊或改回「酒館目前的連線」。`, 'warning');
+        }
+    }
     const fn = ctx().generateRaw;
     if (typeof fn !== 'function') throw new Error('這個版本的酒館不支援背景生成，請更新酒館');
     const src = Function.prototype.toString.call(fn);
