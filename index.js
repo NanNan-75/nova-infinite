@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.18.0
+// Nova 無限流面板 v0.18.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -822,6 +822,9 @@ function buildStateText() {
         if (sd.side) t += sideText(sd.side);
         else if (!String(sd.line_type || '').includes('支線')) t += exclusionText();
         t += worldlineSealedText();
+        if (!String(sd.line_type || '').includes('支線') && !sd.side) {
+            t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n';
+        }
         t += '\n' + OPEN_TAG_SPEC + '\n';
         return t;
     }
@@ -1161,7 +1164,9 @@ function onMessageReceived(mesId) {
         if (obj) {
             logs.push(applyOpen(obj));
             if (cs.instance) cs.instance.open_mes = Number(mesId);
-            if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
+            const willAddCast = s.autoRecover && needMoreCast(cs.instance) && cs.instance.cast.length;
+            if (willAddCast) setTimeout(() => genMoreCast(false), 1200);
+            else if (S().autoDossier) setTimeout(() => genDossiers(false), 1500);
         }
         else toast('開局標籤解析失敗，請檢查 JSON 格式（原文已保存在訊息資料中）', 'warning');
     }
@@ -1410,7 +1415,8 @@ ${msg.mes || ''}`);
         const hadCast = !!cs.instance?.cast?.length;
         const r = merge && cs.instance ? mergeOpen(obj) : applyOpen(obj);
         if (cs.instance) cs.instance.open_mes = i;
-        if (S().autoDossier && (!merge || !hadCast)) setTimeout(() => genDossiers(false), 1500);
+        if (S().autoRecover && needMoreCast(cs.instance) && cs.instance.cast.length) setTimeout(() => genMoreCast(false), 1200);
+        else if (S().autoDossier && (!merge || !hadCast)) setTimeout(() => genDossiers(false), 1500);
         msg.extra = msg.extra || {};
         msg.extra.nova_inf_raw = (msg.extra.nova_inf_raw ? msg.extra.nova_inf_raw + '\n' : '') + `<inf_open>${JSON.stringify(obj)}</inf_open>`;
         delete msg.extra.nova_inf_partial;
@@ -1470,15 +1476,16 @@ const DOSSIER_SPEC = `<inf_dossier>
 ]
 </inf_dossier>`;
 
-async function genDossiers(manual = false) {
+async function genDossiers(manual = false, only = null) {
     const cs = C();
     const inst = cs?.instance;
     if (!inst || !inst.cast.length) { if (manual) toast('目前沒有男主資料', 'warning'); return; }
+    const onlyText = only?.length ? `\n只替以下男主建立，其他人已經有了：${only.join('、')}` : '';
     const prevMode = cs.mode;
     cs.mode = 'instance';
     const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
     cs.mode = prevMode;
-    const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。
+    const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。${onlyText}
 - 目標與仇人要扎根在這個世界的勢力與他的權勢上，並與他在她消失後做的事一致。
 - 男主之間可以互為仇人或對手。
 - 身邊的人是具體的人物，有名字。
@@ -1500,6 +1507,59 @@ ${DOSSIER_SPEC}`);
     } catch (e) {
         console.warn('[Nova無限流] 人生檔案生成失敗', e);
         toast('人生檔案生成失敗：' + (e.message || e) + '。可以到人物分頁按「生成人生檔案」重試。', 'warning');
+    }
+}
+
+// ── 主要男主不足時，在背景補上 ──
+function mainCount(inst) {
+    return (inst?.cast || []).filter(c => c.role === '主要').length;
+}
+
+function needMoreCast(inst) {
+    return inst && !String(inst.line_type || '').includes('支線') && mainCount(inst) < 2;
+}
+
+async function genMoreCast(manual = false) {
+    const cs = C();
+    const inst = cs?.instance;
+    if (!inst) return;
+    const need = Math.max(1, 2 - mainCount(inst)) + (Math.random() < 0.5 ? 1 : 0);
+    const prevMode = cs.mode;
+    cs.mode = 'opening';
+    const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
+    cs.mode = prevMode;
+    const have = inst.cast.map(c => `${c.codename}（${c.real_name || ''}｜${c.identity || ''}｜${c.role}）`).join('、') || '無';
+    const prompt = sub(`這個主線副本的主要男主不足。目前的卡司：${have}。
+請再補 ${need} 位主要男主，使主要男主共 2–3 人：
+- 與目前的男主不同團、不重疊，ASTRIØN／PARALLAX／VELION 盡量各至少一人；遵守上一個主線的卡司限制。
+- 他們各自有自己的地盤與權勢（依〈風暴圈〉），身份依〈身份分配去刻板〉。
+- 他們可能還沒在正文中登場：可以是隱藏存在、傳聞中的人，或之後才會遇到的人；與已經寫出的正文不得矛盾。
+- 欄位與開局資料的 cast 相同（含 cover、aftermath、world_mark 等）。
+只輸出下列格式，不要輸出任何其他文字：
+<inf_cast>[ { 與開局 cast 相同的欄位 } ]</inf_cast>`);
+    toast(manual ? '正在補充男主…' : `主要男主只有 ${mainCount(inst)} 位，正在自動補充…`, 'info');
+    try {
+        const raw = await genRaw(system, prompt, 8192);
+        const found = extractTags(String(raw || ''), 'inf_cast').found;
+        let arr = parseJsonLoose(found[0] ?? raw);
+        if (arr && !Array.isArray(arr)) arr = arr.cast || [arr];
+        if (!Array.isArray(arr) || !arr.length) throw new Error('沒有拿到男主資料');
+        const bl = diffLetter(inst.difficulty);
+        const added = [];
+        for (const c of arr) {
+            if (!c.codename || inst.cast.find(x => x.codename === c.codename)) continue;
+            const nc = normCast(Object.assign({ role: '主要' }, c));
+            if (BALANCE_START[bl] !== undefined && nc.role === '主要' && (nc.balance === null || nc.balance === undefined)) nc.balance = BALANCE_START[bl];
+            inst.cast.push(nc);
+            added.push(nc.codename);
+        }
+        if (!added.length) throw new Error('補上的男主與現有的重複');
+        commit();
+        toast(`補上了 ${added.length} 位男主：${added.join('、')}（之後會在劇情中登場）`, 'success');
+        if (S().autoDossier) setTimeout(() => genDossiers(false, inst.dossier_done ? added : null), 800);
+    } catch (e) {
+        console.warn('[Nova無限流] 補充男主失敗', e);
+        toast('補充男主失敗：' + (e.message || e) + '。可以到人物分頁按「補充男主」重試。', 'warning');
     }
 }
 
@@ -2343,7 +2403,7 @@ function renderPeople() {
             ${c.balance !== null && c.balance !== undefined && pollutionActive(inst) ? `<div class="nova-inf-sub">⚖ ${peek ? `天秤 ${c.balance}（${balanceZone(c.balance)[0]}）${c.balance_type ? '｜' + esc(c.balance_type) : ''}` : esc(balanceZone(c.balance)[1])}</div>` : ''}
             ${c.appearance ? `<div class="nova-inf-sub">外型：${esc(c.appearance)}</div>` : ''}
             <div class="nova-inf-row">${delBtn('cast', i)}</div>
-        </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
+        </div>`).join('') || '<p class="nova-inf-empty">無</p>', (needMoreCast(inst) ? btn('more_cast', '＋ 補充男主', '', 'primary') : '') + btn('edit_cast', '編輯'));
 
     const marks = inst.cast.filter(c => c.world_mark && c.mark_seen);
     if (marks.length || inst.cast.some(c => c.world_mark)) {
@@ -2941,6 +3001,7 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'more_cast': genMoreCast(true); break;
         case 'gen_world': if (!inst?.world_file || confirm('重新生成會覆蓋目前的世界檔案，確定嗎？')) genWorldFile(true); break;
         case 'pol_clean': {
             const cost = Number(s.pollutionCleanCost) || 0;
