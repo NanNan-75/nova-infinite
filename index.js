@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.17.2
+// Nova 無限流面板 v0.18.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -170,7 +170,7 @@ function blankInstance() {
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
         glossary: [], concessions: [], threads: [],
         pollution: 0, pollution_source: '', pollution_notes: [],
-        world_events: [], last_offscreen: 0, dossier_done: false, world_file: null,
+        world_events: [], last_offscreen: 0, dossier_done: false, world_file: null, lies: [],
         after_pollution: 0, after_source: '', after_from: '',
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
@@ -465,6 +465,16 @@ function applyTurn(o) {
         inst.last_offscreen = inst.turn;
     });
     if ((o.offscreen || []).length) log.push('男主們在幕後有了動作');
+    if (!Array.isArray(inst.lies)) inst.lies = [];
+    (o.lie_add || []).forEach(x => {
+        if (!x.claim) return;
+        inst.lies.push({ id: `l${inst.lies.length + 1}`, codename: x.codename || '', claim: x.claim, truth: x.truth || '', exposed: false, turn: inst.turn });
+        log.push('有人對她說了一些話');
+    });
+    (o.lie_exposed || []).forEach(id => {
+        const l = inst.lies.find(x => x.id === id);
+        if (l && !l.exposed) { l.exposed = true; l.exposed_turn = inst.turn; log.push(`一個謊言被揭穿了`); }
+    });
     (o.world_event_seen || []).forEach(txt => { const e = inst.world_events.find(w => w.text === txt); if (e) e.seen = true; });
     if (o.world_event_seen?.length) log.push('她察覺到世界的變化');
     (o.balance || []).forEach(x => {
@@ -929,6 +939,13 @@ function buildStateText() {
     }
 
     if (!String(inst.line_type || '').includes('支線')) t += worldFileText(inst.world_file);
+    const liveLies = (inst.lies || []).filter(l => !l.exposed);
+    if (liveLies.length) {
+        t += '\n【謊言】以下是男主對她說過、尚未被揭穿的謊。在被揭穿之前，說謊的人必須維持這套說詞，前後一致；他不得自己說溜嘴，除非劇情讓他失控或被逼到絕境。每個謊都要留下她查得到的破綻。被揭穿時以 lie_exposed 回報編號。\n';
+        liveLies.forEach(l => { t += `- [${l.id}] ${l.codename}：「${l.claim}」｜【封存】真相：${l.truth}\n`; });
+    }
+    const deadLies = (inst.lies || []).filter(l => l.exposed).slice(-3);
+    if (deadLies.length) t += `已被揭穿的謊：${deadLies.map(l => `${l.codename}「${l.claim}」`).join('；')}（她已經知道真相，他要面對後果）\n`;
     const pendingEvents = (inst.world_events || []).filter(e => !e.seen).slice(-4);
     if (pendingEvents.length) t += `\n【世界正在發生的變化】（男主幕後行動造成，居民可見；她還沒察覺。適合時透過傳聞、街景、新聞讓她碰到，以 world_event_seen 回報原文）\n${pendingEvents.map(e => '- ' + e.text).join('\n')}\n`;
     const every = Math.max(3, Number(S().offscreenEvery) || 6);
@@ -2379,6 +2396,13 @@ function renderClues() {
     const inst = C().instance;
     if (!inst) return noInstance();
     let h = '';
+    if ((inst.lies || []).length) {
+        h += card('🗣 他們說過的話', inst.lies.map(l => `
+            <div class="nova-inf-item ${l.exposed ? 'nova-inf-clue-off' : 'nova-inf-clue-wait'}">
+                <div><b>${esc(l.codename)}</b>：「${esc(l.claim)}」${l.exposed ? '　<span class="nova-inf-warn">已被揭穿</span>' : ''}</div>
+                ${l.exposed || peek ? `<div class="nova-inf-sub">真相：${esc(l.truth)}</div>` : ''}
+            </div>`).join('') + '<p class="nova-inf-hint">有人對你說過的重要說法。哪些是真的、哪些是謊，要你自己判斷。</p>');
+    }
     for (let n = 1; n <= inst.total_acts; n++) {
         const act = inst.acts.find(a => a.number === n);
         const future = n > inst.current_act;
