@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.13.0
+// Nova 無限流面板 v0.13.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -82,6 +82,7 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        autoRecover: true,      // 開局沒抓到資料時，自動根據正文重新生成
         api: { provider: 'st', key: '', model: 'gemini-2.5-flash', baseUrl: '', maxTokens: 32768, temperature: 0.9 },
         pollutionCarry: null,   // 帶進下一個副本的汙染後遺症 {value, source, from}
         pollutionCleanCost: 0,  // 在白域清理汙染要花的碎片
@@ -977,6 +978,7 @@ function onMessageReceived(mesId) {
     const chat = ctx().chat;
     const msg = chat?.[mesId];
     if (!msg || msg.is_user) return;
+    const modeAtStart = cs.mode;
 
     let text = msg.mes || '';
     const logs = [];
@@ -1046,6 +1048,19 @@ function onMessageReceived(mesId) {
     }
 
     scanLeaks(text, [...open.found, ...opts.found].join('\n'));
+
+    // 開局那一輪沒抓到資料（被截斷、格式錯誤、AI 忘了寫）→ 自動根據正文重新生成
+    if (s.autoRecover && modeAtStart === 'opening' && !msg.extra?.nova_auto_recovered && String(text).trim().length > 50) {
+        const inst = cs.instance;
+        const missingAll = !inst || cs.mode === 'opening';
+        const missingPart = inst && cs.mode === 'instance' && (!inst.cast?.length || !inst.map?.regions?.length || !inst.acts?.length);
+        if (missingAll || missingPart) {
+            msg.extra = msg.extra || {};
+            msg.extra.nova_auto_recovered = true;
+            toast(missingAll ? '這一輪沒抓到開局資料，正在根據正文自動重新生成…' : '開局資料缺了一部分，正在自動補齊…', 'info');
+            setTimeout(() => recoverOpen(!missingAll, Number(mesId)), 800);
+        }
+    }
 
     if (cs.instance) cs.instance.turn = cs.instance.turn || 0;
     takeSnapshot();
@@ -1200,9 +1215,9 @@ function mergeOpen(obj) {
     return filled.length ? `補上了：${filled.join('、')}` : '沒有需要補的欄位';
 }
 
-async function recoverOpen(merge = false) {
+async function recoverOpen(merge = false, forceIdx = null) {
     const cs = C();
-    const openIdx = cs?.instance?.open_mes;
+    const openIdx = Number.isInteger(forceIdx) ? forceIdx : cs?.instance?.open_mes;
     const i = Number.isInteger(openIdx) && ctx().chat?.[openIdx] ? openIdx : lastAiIndex();
     if (!cs || i < 0) { toast('找不到 AI 的開局正文', 'warning'); return; }
     const msg = ctx().chat[i];
@@ -2323,6 +2338,7 @@ function renderSettingsTab() {
         <label class="nova-inf-label"><input type="checkbox" data-set="hideOld" ${s.hideOld ? 'checked' : ''}> 結算後前往下一步時，隱藏前面的訊息（AI 看不到，畫面上還在）</label>`) +
         card('插件專用 API', `
         <p class="nova-inf-hint">補抓開局資料、男主人生檔案、通訊器這些「背景生成」，可以改用另一組 API，不受酒館回覆長度限制。正文仍然走酒館原本的連線。</p>
+        <label class="nova-inf-label"><input type="checkbox" data-set="autoRecover" ${s.autoRecover ? 'checked' : ''}> 開局沒抓到資料、或缺了男主／地圖／幕時，自動根據開局正文重新生成</label>
         <label class="nova-inf-label">使用
             <select class="nova-inf-input" data-api="provider">
                 <option value="st" ${(s.api?.provider || 'st') === 'st' ? 'selected' : ''}>酒館目前的連線（預設）</option>
