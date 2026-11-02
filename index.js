@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.4
+// Nova 無限流面板 v0.19.5
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -568,6 +568,7 @@ function endInstance(end) {
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
         her_role: [inst.identity_card?.social_role, inst.identity_card?.name].filter(Boolean).join('／'),
+        her_status: (Object.entries(STATUS_TIERS).find(([, v]) => v[0] === inst.identity_card?.status_tier) || [C()?.seed?.status_rolled || ''])[0],
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
         days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0, real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
@@ -728,6 +729,26 @@ function sideText(src) {
     return t;
 }
 
+// ── 她的身份階層：避免每次都被分到底層 ──
+const STATUS_TIERS = {
+    top: ['頂層', '一出生就站在權力頂端：王族、大貴族、財閥繼承人、教團聖女、族長之女、星際艦隊的少主。可以使喚人，也被無數雙眼睛盯著'],
+    upper: ['上層', '有地位、有財力、有僕從：地方領主、富商之女、名門子弟、高階官員、知名藝人。有人聽她的話，但上面還有人'],
+    middle: ['中層', '靠專業與人脈過日子：學者、軍官、醫者、商行管事、記者、技師。不算顯赫，但有自己的位置'],
+    lower: ['底層', '被使喚的那一方：僕役、學徒、流民、奴隸、底層員工。沒有權力，只有求生'],
+};
+const STATUS_WEIGHTS = [['top', 25], ['upper', 25], ['middle', 30], ['lower', 20]];
+
+function rollStatus() {
+    const s = S();
+    const recent = s.ledger.slice(-2).map(l => l.her_status).filter(Boolean);
+    let pool = STATUS_WEIGHTS.filter(([k]) => !(recent.length === 2 && recent.every(r => r === k)));
+    if (recent[recent.length - 1] === 'lower') pool = pool.filter(([k]) => k !== 'lower');
+    const total = pool.reduce((n, [, w]) => n + w, 0);
+    let r = Math.random() * total;
+    for (const [k, w] of pool) { if ((r -= w) < 0) return k; }
+    return pool[0][0];
+}
+
 // ── 世界線抽籤：AI 自己挑會一直回到鐘樓、溫室、旅館，改由插件隨機決定 ──
 function poolList() {
     return String(S().worldPool || '').split(/[,，、\n]/).map(x => x.trim()).filter(Boolean);
@@ -829,6 +850,9 @@ function buildStateText() {
         if (sd.side) t += sideText(sd.side);
         else if (!String(sd.line_type || '').includes('支線')) t += exclusionText();
         t += worldlineSealedText();
+        if (!sd.status || sd.status === 'auto') { sd.status_rolled = sd.status_rolled || rollStatus(); }
+        const tierKey = sd.status && sd.status !== 'auto' ? sd.status : sd.status_rolled;
+        if (STATUS_TIERS[tierKey]) t += `\n【她的身份階層｜${sd.status && sd.status !== 'auto' ? '玩家指定' : '插件抽籤'}，必須遵守】${STATUS_TIERS[tierKey][0]}：${STATUS_TIERS[tierKey][1]}。身份卡的 status_tier 填「${STATUS_TIERS[tierKey][0]}」。\n`;
         t += '\n【身份卡要求】她的身份卡從這個世界、主線任務與梗型中長出來，不從玩家本人檔案的專長推導：不得因為她會設計、繪畫、排版、攝影、剪輯，就讓她的身份是畫師、彩繪師、壁畫工、油漆工、抄寫員、設計師這類職業。她的專長是她在任何身份下都帶得走的能力，在劇情中意外派上用場。身份卡不得與最近三個副本的身份卡相近（插件附在上方紀錄中）。\n';
         if (!String(sd.line_type || '').includes('支線') && !sd.side) {
             t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n';
@@ -2306,6 +2330,11 @@ function renderOverview() {
             <p class="nova-inf-hint">空白的欄位都交給 AI。謎底一律由 AI 生成並封存，你不會在這裡看到。</p>
             ${f('name', '副本名稱')}
             ${f('world', '主線任務（一句話）')}
+            <label class="nova-inf-label">她的身份階層
+                <select class="nova-inf-input" data-seed="status">
+                    <option value="auto" ${!sd.status || sd.status === 'auto' ? 'selected' : ''}>交給插件抽（${sd.status_rolled && STATUS_TIERS[sd.status_rolled] ? '這次抽到：' + STATUS_TIERS[sd.status_rolled][0] : '開局時抽'}）</option>
+                    ${Object.entries(STATUS_TIERS).map(([k, v]) => `<option value="${k}" ${sd.status === k ? 'selected' : ''}>${v[0]}</option>`).join('')}
+                </select></label>
             ${f('hook_type', '梗型', '身分錯置、規則荒誕、倒數、委託、經營、競賽、旅程、封閉、調查、交換、日常異常、守護、逃離……')}
             ${sd.mechanic ? `<p class="nova-inf-sub">特殊機制：${peek ? esc(sd.mechanic) : '？？？（已封存）'}</p>` : ''}
             <details class="nova-inf-more"><summary>更多欄位（氛圍、名場面、難度……）</summary>

@@ -408,7 +408,7 @@ export const OPEN_TAG_SPEC = `## 【副本開局：輸出格式】
   "people": [{"name": "NPC名稱", "identity": "身份", "faction": "勢力", "observed_attitude": "表面上對她的態度", "hidden_truth": "真正立場"}],
   "factions": [{"name": "勢力名", "stance": "公開立場", "true_goal": "真正目的", "related": "相關男主代號"}],
   "threads": [{"id": "t1", "form": "伏筆形式", "content": "開場就埋下的伏筆", "target": "指向的男主代號或勢力名"}],
-  "identity_card": {"name": "", "age": "", "social_role": "", "family": "", "restrictions": "", "range": "", "friction": "",
+  "identity_card": {"name": "", "age": "", "status_tier": "頂層／上層／中層／底層，依插件指定", "social_role": "", "family": "", "restrictions": "", "range": "", "friction": "",
      "snapshot": {"社交能量": "", "移動偏好": "", "信任形成": "", "衝突風格": "", "體能取向": "", "社交表現": "", "個人空間": ""}},
   "calendar": {"calendar_name": "曆法名稱", "date_label": "當前日期", "time_label": "時段",
      "events": [{"id": "e1", "day": 5, "title": "事件", "sealed": true}]},
