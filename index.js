@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.13.1
+// Nova 無限流面板 v0.17.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -6,6 +6,8 @@ import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from '.
 const MODULE = 'nova_infinite';
 const KEY_RULES = 'nova_inf_rules';
 const KEY_STATE = 'nova_inf_state';
+const KEY_CORE = 'nova_inf_core';
+const PRIORITIES = { core: '★ 核心', normal: '一般', ref: '參考' };
 const SNAPSHOT_LIMIT = 40;
 
 const MODES = {
@@ -19,7 +21,7 @@ const MODES = {
 const RULE_MODES = { lobby: '白域大廳', opening: '副本開局', instance: '副本進行中', settle: '結算', phone: '通訊器' };
 
 const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage',
-    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary'];
+    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary', 'balance', 'balance_type', 'balance_log', 'dark_origin', 'habits', 'courtship'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
 const SEALED_FACTION_KEYS = ['true_goal', 'related'];
 const SEALED_THREAD_KEYS = ['target'];
@@ -82,6 +84,8 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        coreDepth: 2,           // 核心規則放在聊天中的深度（越小越靠近最新訊息）
+        ruleFilter: 'all',
         autoRecover: true,      // 開局沒抓到資料時，自動根據正文重新生成
         api: { provider: 'st', key: '', model: 'gemini-2.5-flash', baseUrl: '', maxTokens: 32768, temperature: 0.9 },
         pollutionCarry: null,   // 帶進下一個副本的汙染後遺症 {value, source, from}
@@ -105,6 +109,21 @@ function S() {
     for (const k of Object.keys(d)) if (s[k] === undefined) s[k] = d[k];
     if (!s.inventory.items) s.inventory.items = [];
     if (!Array.isArray(s.deletedRuleIds)) s.deletedRuleIds = [];
+    if (!Array.isArray(s.folders)) {
+        // 第一次使用資料夾：建立三個預設資料夾，並把預設規則分進去
+        s.folders = [
+            { id: 'f_base', name: '無限流基本規則', enabled: true, collapsed: false },
+            { id: 'f_world', name: '副本中的世界', enabled: true, collapsed: false },
+            { id: 'f_dark', name: '黑化總和設定', enabled: true, collapsed: false },
+        ];
+        const base = ['core', 'unknown_bond', 'perception', 'lobby', 'axes', 'hook', 'difficulty', 'tag_protocol', 'newbie_opening', 'phone', 'scene_protect', 'consequence', 'linger'];
+        const world = ['material', 'opening_cast', 'storm', 'history', 'weave', 'threads', 'immersion'];
+        for (const r of s.rules || []) {
+            if (r.folder) continue;
+            if (base.includes(r.id)) r.folder = 'f_base';
+            else if (world.includes(r.id)) r.folder = 'f_world';
+        }
+    }
     // 新版本新增的預設規則補進來；你改過的不覆蓋，你刪掉的不會再長回來
     for (const r of DEFAULT_RULES) {
         if (!s.rules.find(x => x.id === r.id) && !s.deletedRuleIds.includes(r.id)) s.rules.push(clone(r));
@@ -147,7 +166,7 @@ function blankInstance() {
         calendar: { calendar_name: '', date_label: '', time_label: '', day: 1, events: [] },
         glossary: [], concessions: [], threads: [],
         pollution: 0, pollution_source: '', pollution_notes: [],
-        world_events: [], last_offscreen: 0, dossier_done: false,
+        world_events: [], last_offscreen: 0, dossier_done: false, world_file: null,
         after_pollution: 0, after_source: '', after_from: '',
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
@@ -271,6 +290,8 @@ function applyOpen(obj) {
     inst.map.regions = (obj.map?.regions || []).map(normRegion);
     inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
     inst.daily_life = (obj.daily_life || []).map(normLife);
+    const bl = diffLetter(inst.difficulty);
+    if (BALANCE_START[bl] !== undefined) inst.cast.forEach(c => { if (c.role === '主要' && (c.balance === null || c.balance === undefined)) c.balance = BALANCE_START[bl]; });
     const carry = S().pollutionCarry;
     if (carry?.value) {
         inst.after_pollution = carry.value;
@@ -303,6 +324,7 @@ function normCast(c) {
         cover: '', unmasked: false, slips: [],
         aftermath: '', world_mark: '', mark_seen: false,
         long_goal: '', short_goal: '', short_goal_act: 0, goal_conflict: '', enemies: [], inner_circle: [], anniversary: null, offscreen: [],
+        balance: null, balance_type: '', balance_log: [], dark_origin: null, habits: null,
         last_seen_turn: 0,
     }, c);
 }
@@ -441,6 +463,20 @@ function applyTurn(o) {
     if ((o.offscreen || []).length) log.push('男主們在幕後有了動作');
     (o.world_event_seen || []).forEach(txt => { const e = inst.world_events.find(w => w.text === txt); if (e) e.seen = true; });
     if (o.world_event_seen?.length) log.push('她察覺到世界的變化');
+    (o.balance || []).forEach(x => {
+        const c = inst.cast.find(y => y.codename === x.codename);
+        if (!c || c.balance === null || c.balance === undefined || typeof x.delta !== 'number' || !x.delta) return;
+        const remain = inst.time_limit_days ? inst.time_limit_days - (inst.calendar?.day || 1) : null;
+        const cap = remain !== null && remain <= inst.time_limit_days * 0.2 ? 25 : 15;
+        const d = Math.max(-cap, Math.min(cap, x.delta));
+        const before = balanceZone(c.balance)[0];
+        const floor = diffLetter(inst.difficulty) === 'S' ? -60 : -100;
+        c.balance = Math.max(floor, Math.min(100, c.balance + d));
+        if (!Array.isArray(c.balance_log)) c.balance_log = [];
+        c.balance_log.push({ turn: inst.turn, delta: d, reason: x.reason || '' });
+        if (c.balance_log.length > 10) c.balance_log.shift();
+        if (balanceZone(c.balance)[0] !== before) log.push(`有人的心在動搖`);
+    });
     if (typeof o.pollution_delta === 'number' && o.pollution_delta && pollutionActive(inst)) {
         const d = Math.max(-15, Math.min(10, o.pollution_delta));
         const before = pollutionStage(inst.pollution)[1];
@@ -559,7 +595,8 @@ function endInstance(end) {
             world: inst.axes?.world || '', era: clone(inst.era), world_change: clone(inst.world_change || {}),
             mechanic: inst.axes?.mechanic || '', hook: inst.hook || '', residue: end.residue || '',
             regions: (inst.map?.regions || []).map(r => r.name).filter(Boolean),
-            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark })),
+            world_file: clone(inst.world_file),
+            cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark, dark_origin: clone(c.dark_origin) })),
         };
     }
     const added = makeContacts(inst, end);
@@ -598,6 +635,39 @@ function pollutionActive(inst) {
     return ['B', 'A', 'S'].includes(diffLetter(inst?.difficulty));
 }
 
+// ── 天秤：男主在「讓她自由」與「把她留下」之間的拉扯（B 級以上） ──
+const BALANCE_ANCHORS = {
+    B: ['放手，讓她走', '想辦法留下她'],
+    A: ['讓她自由行動，但始終在他的視線裡', '軟禁'],
+    S: ['讓她「自願」留下：打開籠子，卻站在門口；她能自由走動，但每一條路都通回他身邊', '強行鎖住，不給她猶豫的空檔'],
+};
+const BALANCE_START = { B: 0, A: 40, S: 80 };
+const BALANCE_TYPES = '佔有型（她越依賴，他越不肯放）／自責型（她越被影響，他越想推開她，或越恨自己卻放不了手）／矛盾型（嘴上推開、行動上不放，或白天克制夜裡失控）／試探型（故意給她自由，看她會不會自己回來）／守護型（認定外面才是危險，留下她是為了保護）';
+
+function balanceZone(v) {
+    v = Number(v) || 0;
+    if (v <= -60) return ['左端', '他退得很遠，卻沒有真的離開'];
+    if (v <= -20) return ['偏左', '他好像在刻意和你保持距離'];
+    if (v < 20) return ['拉扯', '他看你的眼神很複雜'];
+    if (v < 60) return ['偏右', '他最近總是剛好出現在你附近'];
+    return ['右端', '他的視線幾乎沒有離開過你'];
+}
+
+function balanceText(c, inst) {
+    const L = diffLetter(inst.difficulty);
+    const an = BALANCE_ANCHORS[L];
+    if (!an || c.balance === null || c.balance === undefined) return '';
+    const z = balanceZone(c.balance);
+    const remain = inst.time_limit_days ? inst.time_limit_days - (inst.calendar?.day || 1) : null;
+    const pressure = remain !== null && remain <= inst.time_limit_days * 0.2;
+    let t = `  【封存】天秤 ${c.balance}（−100「${an[0]}」←→ +100「${an[1]}」）｜目前：${z[0]}`;
+    t += `｜傾向：${c.balance_type || '未定，依性格決定並保持一致'}\n`;
+    if (L === 'S') t += '    S 級的他永遠不會放她走；最低只到「讓她自願留下」。\n';
+    if (c.balance_log?.length) t += `    最近的擺動：${c.balance_log.slice(-2).map(x => `${x.delta > 0 ? '+' : ''}${x.delta}（${x.reason}）`).join('；')}\n`;
+    if (pressure) t += '    ⚠ 時限將至：他知道她快要離開，天秤的擺動會更劇烈（單回合可到 ±25）。\n';
+    return t;
+}
+
 // 最近一個主線出場的男主（下一個主線不得重疊）
 function lastMainNames() {
     const s = S();
@@ -622,6 +692,7 @@ function sideText(src) {
     if (wc.what) t += `主線中的現狀（支線要埋下通往這裡的種子，不得提前發生）：${wc.what}\n`;
     if (wc.cause) t += `崩壞的真正起因：${wc.cause}\n`;
     if (lm.regions?.length) t += `主線中出現過的地區：${lm.regions.join('、')}\n`;
+    t += worldFileText(lm.world_file, true);
     if (lm.mechanic) t += `主線中折磨她的世界規則／機制：${lm.mechanic}\n`;
     if (lm.residue) t += `她身上還帶著主線留下的殘留：${lm.residue}。支線中這個殘留會自然出現（她自己停不下來、改不掉），男主會注意到並記住。\n`;
     t += '因果閉環：支線中她無意間帶來的習慣、說過的話、做過的事，可以成為主線中那些規則、傳說與世界傷痕的起源。主動尋找這種連結，但不得向她點破。\n';
@@ -629,6 +700,7 @@ function sideText(src) {
     (lm.cast || []).forEach(c => {
         t += `- ${c.codename}${c.real_name ? `（${c.real_name}）` : ''}｜主線中的身份：${c.identity || ''}${c.relation_type ? `｜與她的關係：${c.relation_type}` : ''}${c.history_length ? `｜相處時長：${c.history_length}` : ''}\n`;
         if (c.aftermath) t += `  她消失後他做的事（支線的結局必須能通向這裡）：${c.aftermath}\n`;
+        if (c.dark_origin?.type) t += `  他日後的黑化起源：${c.dark_origin.type}｜${c.dark_origin.detail || ''}${c.dark_origin.entity ? `｜侵蝕之物：${c.dark_origin.entity}。支線結尾要埋下它在暗處等著他的伏筆` : ''}\n`;
     });
     t += '支線中男主可以死亡；若主線中他的處境來自死亡或異變（化為非人、被詛咒、墮落、成為傳說），支線就要寫到那一步的起點。\n';
     t += '依〈主線與支線的時間〉：支線發生在他的過去，她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
@@ -833,6 +905,16 @@ function buildStateText() {
             if (c.enemies?.length) t += `  【封存】仇人／對手：${c.enemies.map(e => `${e.name}（${e.reason || ''}${e.status ? '，' + e.status : ''}）`).join('；')}\n`;
             if (c.inner_circle?.length) t += `  身邊的人：${c.inner_circle.map(p => `${p.name}｜${p.relation}｜對她：${p.attitude_to_her}`).join('；')}（他們與他的關係在她眼中${c.cover && !c.unmasked ? '尚未揭露' : '可見'}）\n`;
             if (c.anniversary?.label) t += `  【封存】他的紀念日：副本第 ${c.anniversary.day} 天｜${c.anniversary.label}\n`;
+            if (c.courtship) t += `  他追求她的方式：${c.courtship}\n`;
+            if (c.habits) {
+                const hb = c.habits;
+                t += `  這個世界的他的習慣（取代偶像世界的一切習慣與興趣）：興趣：${hb.hobby || ''}｜小動作：${(hb.quirks || []).join('、')}｜心煩時：${hb.comfort || ''}｜偏好：${hb.taste || ''}\n`;
+            }
+            t += balanceText(c, inst);
+            if (c.dark_origin?.type) {
+                t += `  【封存】黑化起源：${c.dark_origin.type}｜${c.dark_origin.detail || ''}\n`;
+                if (c.dark_origin.entity) t += `    侵蝕之物：${c.dark_origin.entity}｜融合：${c.dark_origin.fusion || '未定'}。他以為她的出現是交易兌現，旁白不得點破。\n`;
+            }
             if (c.offscreen?.length) t += `  【封存】最近的幕後行動：${c.offscreen.slice(-2).map(x => x.progress).join('；')}\n`;
             if (c.world_mark) t += `  這件事留在世界上的痕跡（居民可見，傳聞中不得點名是他）：${c.world_mark}${c.mark_seen ? '｜她已聽聞' : (inst.current_act <= 1 ? '｜⚠ 她還沒聽聞：第一幕內以居民、傳聞、小道消息或親眼所見呈現' : '｜⚠ 她還沒聽聞：盡快呈現')}\n`;
             if (c.this_life) t += `  【封存】此世性格（言行依據）：${c.this_life}\n`;
@@ -842,6 +924,7 @@ function buildStateText() {
         });
     }
 
+    if (!String(inst.line_type || '').includes('支線')) t += worldFileText(inst.world_file);
     const pendingEvents = (inst.world_events || []).filter(e => !e.seen).slice(-4);
     if (pendingEvents.length) t += `\n【世界正在發生的變化】（男主幕後行動造成，居民可見；她還沒察覺。適合時透過傳聞、街景、新聞讓她碰到，以 world_event_seen 回報原文）\n${pendingEvents.map(e => '- ' + e.text).join('\n')}\n`;
     const every = Math.max(3, Number(S().offscreenEvery) || 6);
@@ -855,6 +938,10 @@ function buildStateText() {
         t += '她偶爾會被後遺症拉回去：在相似的聲音、氣味、動作中恍神，下意識尋找那個人，想法短暫地不像自己。這個副本的人不知道原因。後遺症只影響她，不影響本副本男主的設定。\n';
     }
 
+    if (pollutionActive(inst) && inst.cast.some(c => c.balance !== null && c.balance !== undefined)) {
+        t += '\n【天秤】每位主要男主的天秤依他的傾向與本回合發生的事擺動，以 balance 回報。她的反應是觸發，他的性格決定方向。他的行為強度依「難度上限 × 天秤位置」：天秤越靠右端越接近該難度最極端的做法。\n';
+        if ((inst.current_act || 1) >= (inst.total_acts || 1)) t += '最後一幕：召回時的戲依天秤決定——偏右的他會試圖阻止她離開；偏左的他會親手送她走或先一步消失；在中間的他，直到召回的瞬間才做出選擇。\n';
+    }
     if (pollutionActive(inst)) {
         const st = pollutionStage(inst.pollution);
         if (inst.pollution >= 60) t += '\n（汙染度已經很高：若副本在此時結束，instance_end 的 residue 要寫成汙染的後遺症。）';
@@ -939,12 +1026,43 @@ function buildStateText() {
     return t;
 }
 
-function buildRulesText() {
+// 送出順序：先依資料夾順序（未分類在最後），同資料夾內依規則順序
+function orderedRules() {
     const s = S();
+    const fIdx = id => { const i = (s.folders || []).findIndex(f => f.id === id); return i < 0 ? 9999 : i; };
+    return s.rules.map((r, i) => [r, i]).sort((a, b) => fIdx(a[0].folder) - fIdx(b[0].folder) || a[1] - b[1]).map(x => x[0]);
+}
+
+function folderOn(r) {
+    const f = (S().folders || []).find(x => x.id === r.folder);
+    return !f || f.enabled !== false;
+}
+
+function rulesFor(mode, prio) {
+    return orderedRules().filter(r => r.enabled && folderOn(r) && (r.modes || []).includes(mode) && (r.priority || 'normal') === prio);
+}
+
+// 一般規則＋參考規則（放在主提示詞或指定深度）
+function buildRulesText() {
     const cs = C();
-    const rules = s.rules.filter(r => r.enabled && (r.modes || []).includes(cs.mode));
-    if (!rules.length) return '';
-    return '<無限流規則>\n' + rules.map(r => r.content).join('\n\n') + '\n</無限流規則>';
+    const normal = rulesFor(cs.mode, 'normal');
+    const ref = rulesFor(cs.mode, 'ref');
+    if (!normal.length && !ref.length) return '';
+    let t = '<無限流規則>\n' + normal.map(r => r.content).join('\n\n');
+    if (ref.length) t += '\n\n【參考細則】以下為補充，與上方規則或核心規則衝突時，以上方為準。\n' + ref.map(r => r.content).join('\n\n');
+    return t + '\n</無限流規則>';
+}
+
+// 核心規則：放在靠近最新訊息的位置，讓 AI 優先注意
+function buildCoreText() {
+    const cs = C();
+    const core = rulesFor(cs.mode, 'core');
+    if (!core.length) return '';
+    return '<無限流核心規則>\n以下是最優先的規則。與其他任何規則衝突時，以這裡為準；寫作前先確認沒有違反。\n\n' + core.map(r => r.content).join('\n\n') + '\n</無限流核心規則>';
+}
+
+function buildAllRulesText() {
+    return [buildCoreText(), buildRulesText()].filter(Boolean).join('\n\n');
 }
 
 function updateInjection() {
@@ -960,6 +1078,7 @@ function updateInjection() {
     if (!s.enabled || !cs || cs.mode === 'off') {
         setP(KEY_RULES, '', 0, 0);
         setP(KEY_STATE, '', 1, 0);
+        setP(KEY_CORE, '', 1, 0);
         return;
     }
     const rules = sub(buildRulesText());
@@ -967,6 +1086,7 @@ function updateInjection() {
     if (s.rulesDepthMode === 'chat') setP(KEY_RULES, rules, 1, Number(s.rulesDepth) || 4, false, 0);
     else setP(KEY_RULES, rules, 0, 0, false, 0);
     setP(KEY_STATE, state, 1, Number(s.stateDepth) || 1, false, 0);
+    setP(KEY_CORE, sub(buildCoreText()), 1, Number.isFinite(Number(s.coreDepth)) ? Number(s.coreDepth) : 2, false, 0);
 }
 
 // ───────────────────────── 事件 ─────────────────────────
@@ -1223,7 +1343,7 @@ async function recoverOpen(merge = false, forceIdx = null) {
     const msg = ctx().chat[i];
     const prevMode = cs.mode;
     cs.mode = 'opening';
-    const system = sub(buildRulesText() + '\n\n' + buildStateText());
+    const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
     cs.mode = prevMode;
     const prompt = sub(`以下是副本開局的正文。請根據正文，只輸出一個完整的 <inf_open> 標籤（內容為合法 JSON），不要輸出任何其他文字。
 正文中出現的人物、地點、名詞、時間必須與 JSON 一致；正文沒有寫到的欄位，依規則自行補完，但不得與正文矛盾。
@@ -1263,6 +1383,10 @@ function applyDossier(arr) {
         for (const k of ['long_goal', 'short_goal', 'goal_conflict']) if (d[k]) c[k] = d[k];
         if (Array.isArray(d.enemies)) c.enemies = d.enemies;
         if (Array.isArray(d.inner_circle)) c.inner_circle = d.inner_circle;
+        if (d.balance_type) c.balance_type = d.balance_type;
+        if (d.dark_origin?.type) c.dark_origin = d.dark_origin;
+        if (d.habits && typeof d.habits === 'object') c.habits = d.habits;
+        if (d.courtship) c.courtship = d.courtship;
         if (d.short_goal) c.short_goal_act = inst.current_act || 1;
         if (d.anniversary?.label) {
             c.anniversary = d.anniversary;
@@ -1286,7 +1410,11 @@ const DOSSIER_SPEC = `<inf_dossier>
     "goal_conflict": "他的目標與她的主線任務哪裡衝突或交會（沒有就留空）",
     "enemies": [{"name": "仇人或對手（NPC、勢力，或其他男主的代號）", "reason": "結怨的原因", "status": "目前的狀態：明爭、暗鬥、休戰、單方面追殺"}],
     "inner_circle": [{"name": "心腹、下屬、家人、師父、寵物等", "relation": "與他的關係", "attitude_to_her": "這個人會怎麼對待她（依他的心意而定，但這個人不知道原因）"}],
-    "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"}
+    "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"},
+    "courtship": "他重新追求她的方式：在她眼中他們是初識，他得重新讓她喜歡上自己。依性格、身份與權勢設計，具體到做法（送什麼、為她做什麼、怎麼出現在她身邊、怎麼示好或試探）；送禮只是其中一種方式",
+    "habits": {"hobby": "他在這個世界的興趣（一到兩項），必須是這個世界真實存在、符合他身份與成長環境的事", "quirks": ["兩三個小習慣或小動作"], "comfort": "他心煩或疲憊時會做的事", "taste": "他偏好的食物、飲品或氣味"},
+    "dark_origin": {"type": "B 級以上主線才填：自主黑化／侵蝕之物／詛咒／許願／交易／禁忌", "detail": "他是怎麼走到這一步的（兩三句）", "entity": "若為侵蝕之物：它的樣子、本質、它真正的目的、它承諾他什麼；否則留空", "fusion": "若為侵蝕之物：他與它目前融合到什麼程度；否則留空"},
+    "balance_type": "B 級以上才填：他面對『留下她』與『讓她自由』時的傾向，從這些類型中依性格選一種並寫一句說明：${BALANCE_TYPES}"
   }
 ]
 </inf_dossier>`;
@@ -1297,12 +1425,15 @@ async function genDossiers(manual = false) {
     if (!inst || !inst.cast.length) { if (manual) toast('目前沒有男主資料', 'warning'); return; }
     const prevMode = cs.mode;
     cs.mode = 'instance';
-    const system = sub(buildRulesText() + '\n\n' + buildStateText());
+    const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
     cs.mode = prevMode;
     const prompt = sub(`請替本副本的每一位男主建立「人生檔案」，讓他在劇情中像真實存在的人：有自己的目標、仇人、身邊的人與在乎的日子。
 - 目標與仇人要扎根在這個世界的勢力與他的權勢上，並與他在她消失後做的事一致。
 - 男主之間可以互為仇人或對手。
 - 身邊的人是具體的人物，有名字。
+- 習慣與興趣全部重新設計：從他在這個世界的身份、成長環境、能接觸到的資源推導，不得沿用他在偶像世界的習慣、興趣、招牌物件或小動作。性格相似不代表習慣相同；同樣溫和的人，在不同的世界可能種花、修樂器、照顧馬匹或練射箭。這個世界不存在的東西，他不可能會。
+- 黑化起源各自不同；「侵蝕之物」一個副本最多一位，且不是每個副本都要有，它的樣子配合世界觀、每次都不同。
+- 他對她的感情不是單純的愛：要有怨、有恨她不告而別、有不甘、有他自己也說不清的部分。
 只輸出下列格式，不要輸出任何其他文字：
 ${DOSSIER_SPEC}`);
     if (manual) toast('正在生成男主人生檔案…', 'info');
@@ -1314,10 +1445,70 @@ ${DOSSIER_SPEC}`);
         if (!n) throw new Error('沒有對上任何男主的代號');
         commit();
         toast(`已建立 ${n} 位男主的人生檔案（封存）`, 'success');
+        if (!manual && S().autoDossier && !C()?.instance?.world_file) setTimeout(() => genWorldFile(false), 800);
     } catch (e) {
         console.warn('[Nova無限流] 人生檔案生成失敗', e);
         toast('人生檔案生成失敗：' + (e.message || e) + '。可以到人物分頁按「生成人生檔案」重試。', 'warning');
     }
+}
+
+// ── 世界檔案：讓世界有自己的歷史、勢力與日常，不只是男主的舞台 ──
+const WORLD_SPEC = `<inf_world>
+{
+  "history": "崩壞之前，這個世界的歷史、文明、權力結構與它自己的問題（四到六句，男主之外的事）",
+  "timeline": [{"when": "她消失後第幾年／第幾個月", "event": "這段時間世界發生的大事，包含與男主無關的事"}],
+  "factions": [{"name": "勢力名", "goal": "它自己的目的", "stance_on_collapse": "它如何看待、利用或對抗這場崩壞", "related_cast": "與哪位男主有關；無關就留空"}],
+  "ordinary_life": "崩壞之後，一般人怎麼過日子：吃什麼、怕什麼、信什麼、做什麼工作、孩子在學什麼（三到五句）",
+  "born_after": "她消失之後才出生或長大的那一代人，對『從前』的看法",
+  "third_party": "有誰從這場崩壞中得利，正在推波助瀾",
+  "independent_crisis": "一個與男主無關、這個世界本身正在面對的危機",
+  "taboos": ["這個世界現在的禁忌、迷信或新的規矩"]
+}
+</inf_world>`;
+
+async function genWorldFile(manual = false) {
+    const cs = C();
+    const inst = cs?.instance;
+    if (!inst) { if (manual) toast('目前沒有副本', 'warning'); return; }
+    const prevMode = cs.mode;
+    cs.mode = 'instance';
+    const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
+    cs.mode = prevMode;
+    const prompt = sub(`請替這個副本的世界建立「世界檔案」，讓世界的份量配得上副本的時限與難度。
+- 這個世界在男主之外，有它自己的歷史、勢力、經濟、信仰與危機。男主造成的改變，是落在一個本來就在運轉的世界上。
+- 她消失後經過的歲月要有重量：制度改變、新的勢力崛起、一代人長大、人們習慣了崩壞後的生活。
+- 勢力至少一半與男主無關，各有自己的目的；有人從崩壞中得利。
+- 若為童話改寫，善用原作中較少被提及的地區、人物與設定，擴展原作的世界，而不是只用最有名的地點。
+只輸出下列格式，不要輸出任何其他文字：
+${WORLD_SPEC}`);
+    if (manual) toast('正在生成世界檔案…', 'info');
+    try {
+        const raw = await genRaw(system, prompt, 8192);
+        const found = extractTags(String(raw || ''), 'inf_world').found;
+        const obj = parseJsonLoose(found[0] ?? raw);
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('格式不對');
+        inst.world_file = obj;
+        commit();
+        toast('已建立世界檔案（封存）', 'success');
+    } catch (e) {
+        console.warn('[Nova無限流] 世界檔案生成失敗', e);
+        toast('世界檔案生成失敗：' + (e.message || e) + '。可以到地圖分頁按「生成世界檔案」重試。', 'warning');
+    }
+}
+
+function worldFileText(wf, side = false) {
+    if (!wf) return '';
+    let t = side ? '\n【世界檔案（主線時建立，支線發生在崩壞之前）】\n' : '\n【封存｜世界檔案】（世界在男主之外的份量；依劇情需要讓她逐步接觸）\n';
+    if (wf.history) t += `崩壞之前：${wf.history}\n`;
+    if (side) return t + (wf.factions?.length ? `勢力（主線時的樣子，支線中是它們的前身）：${wf.factions.map(f => f.name + '｜' + f.goal).join('；')}\n` : '');
+    if (wf.timeline?.length) t += `她消失後的歲月：${wf.timeline.map(x => `${x.when}：${x.event}`).join('；')}\n`;
+    if (wf.factions?.length) t += `勢力：${wf.factions.map(f => `${f.name}（${f.goal}｜對崩壞：${f.stance_on_collapse}${f.related_cast ? '｜' + f.related_cast : ''}）`).join('；')}\n`;
+    if (wf.ordinary_life) t += `一般人的日子：${wf.ordinary_life}\n`;
+    if (wf.born_after) t += `崩壞後長大的一代：${wf.born_after}\n`;
+    if (wf.third_party) t += `從崩壞中得利的人：${wf.third_party}\n`;
+    if (wf.independent_crisis) t += `世界自己的危機：${wf.independent_crisis}\n`;
+    if (wf.taboos?.length) t += `現在的禁忌與規矩：${wf.taboos.join('；')}\n`;
+    return t;
 }
 
 // 結算後在同一個聊天前往下一步
@@ -1407,6 +1598,7 @@ function makeContacts(inst, end) {
             remnant: c.remnant, obsession_stage: c.obsession_stage, affinity: c.affinity,
             her_identity: [inst.identity_card?.name, inst.identity_card?.social_role].filter(Boolean).join('／'),
             personality: f?.personality || '', calls_her: f?.calls_her || '', story: f?.story || '',
+            balance: c.balance ?? null, balance_type: c.balance_type || '',
             state: f?.state || '', last_moment: f?.last_moment || '', device: f?.device || '',
             days_spent: inst.calendar?.day || 0,
             ratio: PHONE_RATIO[letter] || 50,
@@ -1440,6 +1632,7 @@ function phoneSystemPrompt(c) {
     t += line('與她的關係', c.relation_type) + line('相處時長', c.history_length);
     t += line('你們的故事', c.story) + line('承諾', c.promise) + line('殘留', c.remnant) + line('執念階段', c.obsession_stage);
     t += line('她離開時他的處境', c.state) + line('最後的相處', c.last_moment);
+    if (c.balance !== null && c.balance !== undefined) t += line('她離開時他心裡的天秤', `${c.balance}（−100 讓她自由 ←→ +100 把她留下）${c.balance_type ? '｜' + c.balance_type : ''}`);
     t += `\n【他的世界】\n` + line('副本', c.instance_name) + line('世界', c.world);
     t += line('科技程度', c.era?.tech_level) + line('時代限制', c.era?.anachronism);
     t += line('他那一側的通訊裝置', c.device || '配合他的時代，由你決定，前後一致');
@@ -2068,6 +2261,7 @@ function renderPeople() {
             <div><b>${esc(c.codename)}</b>｜${esc(c.identity)}｜${esc(c.role)}｜${esc(c.category)} 類${c.cover ? `｜<i>原本自稱：${esc(c.cover)}</i>` : ''}</div>
             <div class="nova-inf-sub">資源：${esc(c.resource)}</div>`}
             <div class="nova-inf-sub">真名：${c.revealed ? esc(c.real_name) : sealedVal(c.real_name)}｜好感：${sealedVal(c.affinity)}</div>
+            ${c.balance !== null && c.balance !== undefined && pollutionActive(inst) ? `<div class="nova-inf-sub">⚖ ${peek ? `天秤 ${c.balance}（${balanceZone(c.balance)[0]}）${c.balance_type ? '｜' + esc(c.balance_type) : ''}` : esc(balanceZone(c.balance)[1])}</div>` : ''}
             ${c.appearance ? `<div class="nova-inf-sub">外型：${esc(c.appearance)}</div>` : ''}
             <div class="nova-inf-row">${delBtn('cast', i)}</div>
         </div>`).join('') || '<p class="nova-inf-empty">無</p>', btn('edit_cast', '編輯'));
@@ -2090,6 +2284,8 @@ function renderPeople() {
             ${c.enemies?.length ? `<div class="nova-inf-sub">仇人：${c.enemies.map(e => esc(e.name)).join('、')}</div>` : ''}
             ${c.inner_circle?.length ? `<div class="nova-inf-sub">身邊的人：${c.inner_circle.map(p => esc(p.name + '（' + p.relation + '）')).join('、')}</div>` : ''}
             ${c.anniversary?.label ? `<div class="nova-inf-sub">紀念日：第 ${esc(c.anniversary.day)} 天｜${esc(c.anniversary.label)}</div>` : ''}
+            ${c.courtship ? `<div class="nova-inf-sub">追求方式：${esc(c.courtship)}</div>` : ''}
+            ${c.habits ? `<div class="nova-inf-sub">習慣：${esc(c.habits.hobby || '')}｜${esc((c.habits.quirks || []).join('、'))}</div>` : ''}
             ${c.offscreen?.length ? `<div class="nova-inf-sub">幕後：${esc(c.offscreen[c.offscreen.length - 1].progress)}</div>` : ''}
         </div>`).join('') : `<p>${inst.dossier_done ? '已建立 🔒' : '尚未建立'}</p>`}`,
         btn('gen_dossier', inst.dossier_done ? '重新生成' : '生成人生檔案'));
@@ -2189,7 +2385,16 @@ function renderWorldMap() {
     const era = inst.era || {};
     const regions = inst.map?.regions || [];
     const life = inst.daily_life || [];
-    return card('時代與技術', `
+    const wf = inst.world_file;
+    const wfCard = card('🌍 世界檔案', wf ? (peek ? `
+        ${wf.history ? `<p class="nova-inf-sub">崩壞之前：${esc(wf.history)}</p>` : ''}
+        ${wf.timeline?.length ? `<p class="nova-inf-sub">歲月：${wf.timeline.map(x => esc(x.when + '｜' + x.event)).join('<br>')}</p>` : ''}
+        ${wf.factions?.length ? `<p class="nova-inf-sub">勢力：${wf.factions.map(f => esc(f.name + '：' + f.goal)).join('<br>')}</p>` : ''}
+        ${wf.ordinary_life ? `<p class="nova-inf-sub">日常：${esc(wf.ordinary_life)}</p>` : ''}
+        ${wf.third_party ? `<p class="nova-inf-sub">得利者：${esc(wf.third_party)}</p>` : ''}
+        ${wf.independent_crisis ? `<p class="nova-inf-sub">世界自己的危機：${esc(wf.independent_crisis)}</p>` : ''}` : '<p>已建立 🔒</p>') : '<p class="nova-inf-empty">尚未建立。開局後會在背景自動生成。</p>',
+        btn('gen_world', wf ? '重新生成' : '生成世界檔案'));
+    return wfCard + card('時代與技術', `
         <p>${esc(era.tech_level) || '<span class="nova-inf-empty">未設定</span>'}</p>
         ${era.anachronism ? `<p class="nova-inf-sub">超時代設施：${esc(era.anachronism)}</p>` : ''}`, btn('edit_era', '編輯')) +
         card(`地圖｜目前位置：${esc(inst.location || '未知')}`, regions.map((r, i) => `
@@ -2290,27 +2495,83 @@ function renderProfile() {
         <div class="nova-inf-row">${s.playerProfile?.trim() ? '' : btn('profile_template', '插入填寫範本', '', 'primary')}</div>`);
 }
 
-function renderRules() {
+function ruleCard(r, i) {
     const s = S();
-    const missing = DEFAULT_RULES.filter(d => !s.rules.find(r => r.id === d.id)).length;
-    return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI，順序就是送出的順序。標題與內容可以直接修改，點到別處就會自動儲存。</p>
-        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則', '', 'primary')}</div>` +
-        s.rules.map((r, i) => `
+    return `
         <details class="nova-inf-card" ${openRuleId === r.id ? 'open' : ''} data-rule-id="${esc(r.id)}">
             <summary><input type="checkbox" data-rule-on="${i}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title)}</b>
+                <span class="nova-inf-chip nova-prio-${r.priority || 'normal'}">${PRIORITIES[r.priority || 'normal']}</span>
                 ${r.custom ? '<span class="nova-inf-chip">自訂</span>' : ''}
                 <span class="nova-inf-sub">${(r.modes || []).map(m => RULE_MODES[m] || m).join('、') || '未指定模式（不會送出）'}</span></summary>
             <label class="nova-inf-label">標題<input class="nova-inf-input" data-rule-title="${i}" value="${esc(r.title)}"></label>
             <div class="nova-inf-row">${Object.entries(RULE_MODES).map(([k, v]) =>
                 `<label class="nova-inf-chip"><input type="checkbox" data-rule-mode="${i}" value="${k}" ${(r.modes || []).includes(k) ? 'checked' : ''}>${v}</label>`).join('')}</div>
-            <textarea class="nova-inf-input nova-inf-rule" rows="10" data-rule-text="${i}">${esc(r.content)}</textarea>
             <div class="nova-inf-row">
+                <label class="nova-inf-label" style="flex:1">權重
+                    <select class="nova-inf-input" data-rule-prio="${i}">
+                        ${Object.entries(PRIORITIES).map(([k, v]) => `<option value="${k}" ${(r.priority || 'normal') === k ? 'selected' : ''}>${v}</option>`).join('')}
+                    </select></label>
+                <label class="nova-inf-label" style="flex:1">資料夾
+                    <select class="nova-inf-input" data-rule-folder="${i}">
+                        <option value="">未分類</option>
+                        ${(s.folders || []).map(f => `<option value="${esc(f.id)}" ${r.folder === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}
+                    </select></label>
+            </div>
+            <textarea class="nova-inf-input nova-inf-rule" rows="10" data-rule-text="${i}">${esc(r.content)}</textarea>
+            <p class="nova-inf-sub">${(r.content || '').length} 字</p>
+            <div class="nova-inf-row">
+                ${btn('rule_top', '⤒ 移到最前', `data-i="${i}"`)}
                 ${btn('rule_up', '↑ 上移', `data-i="${i}"`)}
                 ${btn('rule_down', '↓ 下移', `data-i="${i}"`)}
+                ${btn('rule_bottom', '⤓ 移到最後', `data-i="${i}"`)}
                 ${btn('rule_dup', '複製一份', `data-i="${i}"`)}
                 ${btn('rule_del', '🗑 刪除', `data-i="${i}"`, 'danger')}
             </div>
-        </details>`).join('') +
+        </details>`;
+}
+
+function renderRules() {
+    const s = S();
+    const missing = DEFAULT_RULES.filter(d => !s.rules.find(r => r.id === d.id)).length;
+    const f = s.ruleFilter || 'all';
+    const visible = r => f === 'all' || (r.modes || []).includes(f);
+    const modeLen = f === 'all' ? null : ['core', 'normal', 'ref'].map(p => [p, rulesFor(f, p).reduce((n, r) => n + (r.content || '').length, 0)]);
+    const groups = [...(s.folders || []), { id: '', name: '未分類', enabled: true, collapsed: !!s.unfiledCollapsed, virtual: true }];
+    const folderBlock = (fd, fi) => {
+        const items = s.rules.map((r, i) => [r, i]).filter(([r]) => (r.folder || '') === fd.id && (fd.id || !s.folders.find(x => x.id === r.folder)) && visible(r));
+        const all = s.rules.filter(r => (r.folder || '') === fd.id);
+        if (fd.virtual && !all.length) return '';
+        return `<details class="nova-folder ${fd.enabled === false ? 'off' : ''}" data-folder-id="${esc(fd.id || '_unfiled')}" ${fd.collapsed ? '' : 'open'}>
+            <summary class="nova-folder-head">
+                ${fd.virtual ? '' : `<input type="checkbox" data-folder-on="${fi}" ${fd.enabled !== false ? 'checked' : ''} title="整個資料夾開啟或關閉">`}
+                <b>📁 ${esc(fd.name)}</b>
+                <span class="nova-inf-sub">${all.length} 條${fd.enabled === false ? '｜整個資料夾已關閉' : ''}</span>
+            </summary>
+            ${fd.virtual ? '' : `<div class="nova-inf-row">
+                ${btn('rule_add', '＋ 在這裡新增規則', `data-folder="${esc(fd.id)}"`)}
+                ${btn('folder_rename', '重新命名', `data-fi="${fi}"`)}
+                ${btn('folder_up', '↑', `data-fi="${fi}"`)}${btn('folder_down', '↓', `data-fi="${fi}"`)}
+                ${btn('folder_del', '🗑 刪除資料夾', `data-fi="${fi}"`, 'danger')}
+            </div>`}
+            ${items.map(([r, i]) => ruleCard(r, i)).join('') || '<p class="nova-inf-empty">這個資料夾沒有符合篩選的規則</p>'}
+        </details>`;
+    };
+    return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI。送出順序：同一個權重內，先依資料夾的順序，再依資料夾裡規則的順序。關閉資料夾，裡面的規則全部不會送出。</p>
+        <details class="nova-inf-guide nova-inf-more">
+            <summary class="nova-inf-guide-title">權重怎麼分</summary>
+            <ol>
+                <li><b>★ 核心</b>：放在最靠近最新訊息的位置，並標明「與其他規則衝突時以此為準」。只放最不能被違反的幾條（建議 3–5 條）。</li>
+                <li><b>一般</b>：放在主提示詞，照順序送出。</li>
+                <li><b>參考</b>：放在一般規則的後面，標明「衝突時以上方為準」。適合細節、範例、補充。</li>
+            </ol>
+        </details>
+        <div class="nova-inf-row">${btn('rule_add', '＋ 新增規則', '', 'primary')}${btn('folder_add', '＋ 新增資料夾')}
+            <select class="nova-inf-input" style="width:auto" data-rule-filter="1">
+                <option value="all" ${f === 'all' ? 'selected' : ''}>顯示全部</option>
+                ${Object.entries(RULE_MODES).map(([k, v]) => `<option value="${k}" ${f === k ? 'selected' : ''}>只看「${v}」會送出的</option>`).join('')}
+            </select></div>
+        ${modeLen ? `<p class="nova-inf-sub">這個模式送出的字數：核心 ${modeLen[0][1]}｜一般 ${modeLen[1][1]}｜參考 ${modeLen[2][1]}</p>` : ''}` +
+        groups.map((fd, fi) => folderBlock(fd, fi)).join('') +
         `<div class="nova-inf-row">
             ${missing ? btn('rules_restore_missing', `補回被刪掉的預設規則（${missing} 條）`) : ''}
             ${btn('rules_reset', '全部還原為預設（會刪掉自訂規則與修改）', '', 'danger')}
@@ -2354,7 +2615,7 @@ function renderSettingsTab() {
         <div class="nova-inf-row">${btn('api_test', '測試連線')}</div>
         <p class="nova-inf-hint">金鑰存在酒館的設定檔裡，匯出備份時不會包含。</p>` : ''}`) +
         card('男主人生檔案', `
-        <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（目標、仇人、身邊的人、紀念日）</label>
+        <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（男主的目標、仇人、身邊的人、紀念日、習慣、黑化起源，以及世界檔案）</label>
         <label class="nova-inf-label">在白域清理汙染要花的碎片（0 為免費）<input class="nova-inf-input" type="number" min="0" data-set="pollutionCleanCost" value="${s.pollutionCleanCost || 0}"></label>
         <label class="nova-inf-label">每幾回合請 AI 回報男主的幕後行動<input class="nova-inf-input" type="number" min="3" data-set="offscreenEvery" value="${s.offscreenEvery || 6}"></label>`) +
         card('插件設定', `
@@ -2365,7 +2626,8 @@ function renderSettingsTab() {
                 <option value="chat" ${s.rulesDepthMode === 'chat' ? 'selected' : ''}>聊天中（指定深度）</option>
             </select></label>
         <label class="nova-inf-label">規則深度（選「聊天中」時有效）<input class="nova-inf-input" type="number" data-set="rulesDepth" value="${s.rulesDepth}"></label>
-        <label class="nova-inf-label">狀態深度（建議 1）<input class="nova-inf-input" type="number" data-set="stateDepth" value="${s.stateDepth}"></label>`) +
+        <label class="nova-inf-label">狀態深度（建議 1）<input class="nova-inf-input" type="number" data-set="stateDepth" value="${s.stateDepth}"></label>
+        <label class="nova-inf-label">★ 核心規則深度（建議 1–3，越小越靠近最新訊息）<input class="nova-inf-input" type="number" min="0" data-set="coreDepth" value="${s.coreDepth ?? 2}"></label>`) +
         card('世界線抽籤', `
         <label class="nova-inf-label"><input type="checkbox" data-set="rollWorlds" ${s.rollWorlds ? 'checked' : ''}> 白域大廳由插件隨機抽世界線（避免 AI 一直選同類型）</label>
         <label class="nova-inf-label">一批抽幾個（等於副本選項數量，1–8）<input class="nova-inf-input" type="number" min="1" max="8" data-set="rollCount" value="${s.rollCount || 3}"></label>
@@ -2434,6 +2696,14 @@ function mergeKeys(orig, edited, keys) {
 // ───────────────────────── 互動 ─────────────────────────
 
 function onBodyClick(ev) {
+    const fdet = ev.target.closest('details[data-folder-id]');
+    if (fdet && ev.target.closest('summary')?.parentElement === fdet && ev.target.tagName !== 'INPUT') {
+        const id = fdet.dataset.folderId;
+        const willCollapse = fdet.open;
+        if (id === '_unfiled') S().unfiledCollapsed = willCollapse;
+        else { const fd = (S().folders || []).find(x => x.id === id); if (fd) fd.collapsed = willCollapse; }
+        saveSettings();
+    }
     const det = ev.target.closest('details[data-rule-id]');
     if (det && ev.target.closest('summary') && ev.target.tagName !== 'INPUT') {
         openRuleId = det.open ? null : det.dataset.ruleId;
@@ -2563,6 +2833,7 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'gen_world': if (!inst?.world_file || confirm('重新生成會覆蓋目前的世界檔案，確定嗎？')) genWorldFile(true); break;
         case 'pol_clean': {
             const cost = Number(s.pollutionCleanCost) || 0;
             if ((s.inventory.shards || 0) < cost) { toast(`碎片不足，清理需要 ${cost} 碎片`, 'warning'); break; }
@@ -2667,9 +2938,38 @@ function onBodyClick(ev) {
             DEFAULT_RULES.forEach(d => { if (!s.rules.find(r => r.id === d.id)) s.rules.push(clone(d)); });
             commit();
             break;
+        case 'folder_add': {
+            const name = prompt('資料夾名稱', '新資料夾');
+            if (!name) break;
+            s.folders.push({ id: 'f_' + Date.now(), name: name.trim(), enabled: true, collapsed: false });
+            commit();
+            break;
+        }
+        case 'folder_rename': {
+            const fd = s.folders[Number(b.dataset.fi)];
+            const name = fd && prompt('資料夾名稱', fd.name);
+            if (name) { fd.name = name.trim(); commit(); }
+            break;
+        }
+        case 'folder_up': case 'folder_down': {
+            const i = Number(b.dataset.fi);
+            const j = act === 'folder_up' ? i - 1 : i + 1;
+            if (j < 0 || j >= s.folders.length) break;
+            [s.folders[i], s.folders[j]] = [s.folders[j], s.folders[i]];
+            commit();
+            break;
+        }
+        case 'folder_del': {
+            const fd = s.folders[Number(b.dataset.fi)];
+            if (!fd || !confirm(`刪除資料夾「${fd.name}」？裡面的規則不會被刪掉，會移到「未分類」。`)) break;
+            s.rules.forEach(r => { if (r.folder === fd.id) r.folder = ''; });
+            s.folders = s.folders.filter(x => x.id !== fd.id);
+            commit();
+            break;
+        }
         case 'rule_add': {
             const id = 'custom_' + Date.now();
-            s.rules.push({ id, title: '新規則', modes: ['instance'], enabled: true, custom: true, content: '' });
+            s.rules.push({ id, title: '新規則', modes: ['instance'], enabled: true, custom: true, content: '', folder: b.dataset.folder || '' });
             openRuleId = id;
             commit();
             break;
@@ -2692,12 +2992,27 @@ function onBodyClick(ev) {
             commit();
             break;
         }
-        case 'rule_up': case 'rule_down': {
+        case 'rule_top': case 'rule_bottom': case 'rule_up': case 'rule_down': {
+            // 只在同一個資料夾裡移動
             const i = Number(b.dataset.i);
-            const j = act === 'rule_up' ? i - 1 : i + 1;
-            if (j < 0 || j >= s.rules.length) break;
-            [s.rules[i], s.rules[j]] = [s.rules[j], s.rules[i]];
-            openRuleId = s.rules[j].id;
+            const r = s.rules[i];
+            const same = s.rules.map((x, k) => k).filter(k => (s.rules[k].folder || '') === (r.folder || ''));
+            const pos = same.indexOf(i);
+            let target;
+            if (act === 'rule_top') target = same[0];
+            else if (act === 'rule_bottom') target = same[same.length - 1];
+            else if (act === 'rule_up') target = same[pos - 1];
+            else target = same[pos + 1];
+            if (target === undefined || target === i) break;
+            if (act === 'rule_up' || act === 'rule_down') {
+                [s.rules[i], s.rules[target]] = [s.rules[target], s.rules[i]];
+            } else {
+                const anchor = s.rules[target];
+                s.rules.splice(i, 1);
+                const at = s.rules.indexOf(anchor);
+                s.rules.splice(act === 'rule_top' ? at : at + 1, 0, r);
+            }
+            openRuleId = r.id;
             commit();
             break;
         }
@@ -2763,7 +3078,7 @@ function onBodyClick(ev) {
             break;
         }
         case 'preview': {
-            const text = sub(buildRulesText()) + '\n\n' + sub(buildStateText());
+            const text = sub(buildCoreText()) + '\n\n' + sub(buildRulesText()) + '\n\n' + sub(buildStateText());
             openEditor('注入預覽（僅供檢視）', text, null);
             break;
         }
@@ -2795,6 +3110,10 @@ function onBodyChange(ev) {
         saveSettings(); updateInjection(); renderPanel(); return;
     }
     if (t.dataset.ruleText !== undefined) { const r = s.rules[Number(t.dataset.ruleText)]; r.content = t.value; openRuleId = r.id; saveSettings(); updateInjection(); return; }
+    if (t.dataset.rulePrio !== undefined) { const r = s.rules[Number(t.dataset.rulePrio)]; r.priority = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
+    if (t.dataset.ruleFolder !== undefined) { const r = s.rules[Number(t.dataset.ruleFolder)]; r.folder = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
+    if (t.dataset.folderOn !== undefined) { const fd = s.folders[Number(t.dataset.folderOn)]; if (fd) { fd.enabled = t.checked; saveSettings(); updateInjection(); renderPanel(); } return; }
+    if (t.dataset.ruleFilter) { s.ruleFilter = t.value; saveSettings(); renderPanel(); return; }
     if (t.dataset.ruleTitle !== undefined) {
         const r = s.rules[Number(t.dataset.ruleTitle)];
         r.title = t.value.trim() || '未命名規則';

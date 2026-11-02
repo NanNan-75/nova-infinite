@@ -431,3 +431,21 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 
 /* ───── v0.10 汙染度 ───── */
 .nova-inf-pollution > div { background: linear-gradient(90deg, #8e5aa8, #b23a48); }
+
+/* ───── v0.16 規則權重 ───── */
+.nova-prio-core { background: var(--SmartThemeQuoteColor, #8ab4f8); color: #111; border-radius: 999px; padding: 0 6px; opacity: 1; }
+.nova-prio-ref { opacity: 0.55; }
+
+/* ───── v0.17 規則資料夾 ───── */
+.nova-folder {
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-left: 3px solid var(--SmartThemeQuoteColor, #8ab4f8);
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin: 10px 0;
+    background: rgba(255, 255, 255, 0.02);
+}
+.nova-folder.off { opacity: 0.5; border-left-color: rgba(255, 255, 255, 0.2); }
+.nova-folder > summary { cursor: pointer; list-style: none; padding: 4px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.nova-folder > summary::-webkit-details-marker { display: none; }
+.nova-folder > .nova-inf-card { margin-left: 4px; }

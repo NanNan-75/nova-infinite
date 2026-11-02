@@ -476,6 +476,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
   "shards": 0,
   "offscreen": [{"codename": "代號", "progress": "他在她看不到的地方推進了什麼", "visible_effect": "這件事在世界上造成、居民看得到的變化（不點名是他；沒有就留空）"}],
   "world_event_seen": ["她本回合察覺到的世界變化，原文照抄插件提供的句子"],
+  "balance": [{"codename": "代號", "delta": 0, "reason": "他的天秤為什麼擺動（一句）"}],
   "pollution_delta": 0,
   "pollution_source": "造成汙染的男主代號",
   "pollution_note": "這一輪汙染在她身上的具體表現，一句話",
@@ -495,6 +496,7 @@ export const TURN_TAG_SPEC = `## 【回合狀態更新：輸出格式】
 - 男主的表面身份露出破綻、且她親眼看到時，以 cast_update 的 slip 回報；他的真實身份在劇情中被揭露時，回報 unmasked: true。
 - 進入新的一幕時，以 cast_update 更新每位主要男主的 short_goal。插件提示需要時，以 offscreen 回報男主的幕後行動。
 - 共墮通關：她與男主一起墮落，但以他們的方式完成了主線。共墮滯留：她放棄主線、選擇留在他身邊，直到被強制召回。兩者的 exit_type 皆依實際情況填寫，cast_fate 照常填寫。
+- balance 只用於 B 級以上：依男主的天秤傾向與本回合發生的事，回報他往「留下」（正）或「自由」（負）擺動多少，單回合 ±15，時限將至時 ±25。沒有變化就省略。
 - pollution_delta 只用於 B 級以上：男主的黑化侵入她的感知或判斷時增加（單回合最多 +10）；她抵抗、抓住現實錨點時減少（單回合最多 −15）。沒有變化就填 0。
 - 只有副本真正結束時才輸出 instance_end。
 - instance_end 的 cast_fate 必須列出每一位男主。alive：他在結局時是否活著；good_ending：他活著，而且她是以好的方式與他告別離開，才為 true。`;
