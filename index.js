@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.17.0
+// Nova 無限流面板 v0.17.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -84,7 +84,8 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
-        coreDepth: 2,           // 核心規則放在聊天中的深度（越小越靠近最新訊息）
+        coreDepth: 2,
+        folderHeaders: true,    // 送出時附上資料夾標題與說明           // 核心規則放在聊天中的深度（越小越靠近最新訊息）
         ruleFilter: 'all',
         autoRecover: true,      // 開局沒抓到資料時，自動根據正文重新生成
         api: { provider: 'st', key: '', model: 'gemini-2.5-flash', baseUrl: '', maxTokens: 32768, temperature: 0.9 },
@@ -1042,14 +1043,32 @@ function rulesFor(mode, prio) {
     return orderedRules().filter(r => r.enabled && folderOn(r) && (r.modes || []).includes(mode) && (r.priority || 'normal') === prio);
 }
 
+// 依資料夾分段，讓 AI 知道哪些規則屬於同一類
+function groupText(list) {
+    const s = S();
+    if (!s.folderHeaders) return list.map(r => r.content).join('\n\n');
+    const out = [];
+    let cur;
+    for (const r of list) {
+        const fid = (s.folders || []).find(f => f.id === r.folder) ? r.folder : '';
+        if (fid !== cur) {
+            cur = fid;
+            const fd = (s.folders || []).find(f => f.id === fid);
+            out.push(fd ? `═══ ${fd.name} ═══${fd.desc ? '\n（' + fd.desc + '）' : ''}` : '═══ 其他規則 ═══');
+        }
+        out.push(r.content);
+    }
+    return out.join('\n\n');
+}
+
 // 一般規則＋參考規則（放在主提示詞或指定深度）
 function buildRulesText() {
     const cs = C();
     const normal = rulesFor(cs.mode, 'normal');
     const ref = rulesFor(cs.mode, 'ref');
     if (!normal.length && !ref.length) return '';
-    let t = '<無限流規則>\n' + normal.map(r => r.content).join('\n\n');
-    if (ref.length) t += '\n\n【參考細則】以下為補充，與上方規則或核心規則衝突時，以上方為準。\n' + ref.map(r => r.content).join('\n\n');
+    let t = '<無限流規則>\n' + groupText(normal);
+    if (ref.length) t += '\n\n【參考細則】以下為補充，與上方規則或核心規則衝突時，以上方為準。\n' + groupText(ref);
     return t + '\n</無限流規則>';
 }
 
@@ -1058,7 +1077,7 @@ function buildCoreText() {
     const cs = C();
     const core = rulesFor(cs.mode, 'core');
     if (!core.length) return '';
-    return '<無限流核心規則>\n以下是最優先的規則。與其他任何規則衝突時，以這裡為準；寫作前先確認沒有違反。\n\n' + core.map(r => r.content).join('\n\n') + '\n</無限流核心規則>';
+    return '<無限流核心規則>\n以下是最優先的規則。與其他任何規則衝突時，以這裡為準；寫作前先確認沒有違反。\n\n' + groupText(core) + '\n</無限流核心規則>';
 }
 
 function buildAllRulesText() {
@@ -2547,7 +2566,9 @@ function renderRules() {
                 <b>📁 ${esc(fd.name)}</b>
                 <span class="nova-inf-sub">${all.length} 條${fd.enabled === false ? '｜整個資料夾已關閉' : ''}</span>
             </summary>
-            ${fd.virtual ? '' : `<div class="nova-inf-row">
+            ${fd.virtual ? '' : `<label class="nova-inf-label">資料夾說明（送給 AI，一句話說明這一組規則管什麼；可留空）
+                <input class="nova-inf-input" data-folder-desc="${fi}" value="${esc(fd.desc || '')}" placeholder="例：男主黑化時的行為、強度與汙染"></label>
+            <div class="nova-inf-row">
                 ${btn('rule_add', '＋ 在這裡新增規則', `data-folder="${esc(fd.id)}"`)}
                 ${btn('folder_rename', '重新命名', `data-fi="${fi}"`)}
                 ${btn('folder_up', '↑', `data-fi="${fi}"`)}${btn('folder_down', '↓', `data-fi="${fi}"`)}
@@ -2557,6 +2578,7 @@ function renderRules() {
         </details>`;
     };
     return `<p class="nova-inf-hint">勾選的規則會在對應模式下送給 AI。送出順序：同一個權重內，先依資料夾的順序，再依資料夾裡規則的順序。關閉資料夾，裡面的規則全部不會送出。</p>
+        <label class="nova-inf-label"><input type="checkbox" data-set="folderHeaders" ${s.folderHeaders ? 'checked' : ''}> 送給 AI 時附上資料夾標題與說明（讓 AI 知道規則的分類）</label>
         <details class="nova-inf-guide nova-inf-more">
             <summary class="nova-inf-guide-title">權重怎麼分</summary>
             <ol>
@@ -3112,6 +3134,7 @@ function onBodyChange(ev) {
     if (t.dataset.ruleText !== undefined) { const r = s.rules[Number(t.dataset.ruleText)]; r.content = t.value; openRuleId = r.id; saveSettings(); updateInjection(); return; }
     if (t.dataset.rulePrio !== undefined) { const r = s.rules[Number(t.dataset.rulePrio)]; r.priority = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
     if (t.dataset.ruleFolder !== undefined) { const r = s.rules[Number(t.dataset.ruleFolder)]; r.folder = t.value; openRuleId = r.id; saveSettings(); updateInjection(); renderPanel(); return; }
+    if (t.dataset.folderDesc !== undefined) { const fd = s.folders[Number(t.dataset.folderDesc)]; if (fd) { fd.desc = t.value.trim(); saveSettings(); updateInjection(); } return; }
     if (t.dataset.folderOn !== undefined) { const fd = s.folders[Number(t.dataset.folderOn)]; if (fd) { fd.enabled = t.checked; saveSettings(); updateInjection(); renderPanel(); } return; }
     if (t.dataset.ruleFilter) { s.ruleFilter = t.value; saveSettings(); renderPanel(); return; }
     if (t.dataset.ruleTitle !== undefined) {
