@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.7
+// Nova 無限流面板 v0.20.1
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -87,6 +87,8 @@ function defaultSettings() {
         continueMode: 'same',   // same：選定副本後在同一個聊天開局；new：開新聊天
         hideOld: true,          // 進入下一個副本時隱藏前面的訊息
         lastMain: null,
+        revisits: [],           // 可以重訪的男主（主線結束時建立，支線通關後開放）
+        revisitCost: 50,
         coreDepth: 2,
         folderHeaders: true,    // 送出時附上資料夾標題與說明           // 核心規則放在聊天中的深度（越小越靠近最新訊息）
         ruleFilter: 'all',
@@ -619,7 +621,7 @@ function endInstance(end) {
     }
     // 僅限本副本的道具在離開時消失
     s.inventory.items = s.inventory.items.filter(it => !(it.instance_id === inst.id && it.carry_rule === '僅限本副本'));
-    if (!String(inst.line_type || '').includes('支線')) {
+    if (!String(inst.line_type || '').includes('支線') && !String(inst.line_type || '').includes('重訪')) {
         s.lastMain = {
             instance_id: inst.id, name: inst.name, worldline: inst.worldline,
             world: inst.axes?.world || '', era: clone(inst.era), world_change: clone(inst.world_change || {}),
@@ -628,6 +630,18 @@ function endInstance(end) {
             world_file: clone(inst.world_file), world_scope: clone(inst.world_scope),
             cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark, dark_origin: clone(c.dark_origin), birthplace: c.birthplace || '' })),
         };
+    }
+    const lt = String(inst.line_type || '');
+    if (!lt.includes('支線') && !lt.includes('重訪')) recordRevisits(inst, end);
+    if (lt.includes('支線')) { const n = markSideDone(inst); if (n) setTimeout(() => toast(`可以重訪 ${n} 位男主了（✨ 世界線分頁）`, 'success'), 900); }
+    if (lt.includes('重訪')) {
+        const rid = C()?.seed?.revisit?.key;
+        const r = (s.revisits || []).find(x => x.key === rid);
+        if (r) {
+            r.visits = (r.visits || 0) + 1;
+            r.left_ts = Date.now();
+            if (/留下/.test(inst.status)) { r.settled = 'stay'; s.finale = { key: r.key, world: r.instance_name, name: r.revealed && r.real_name ? r.real_name : r.codename, date: new Date().toISOString().slice(0, 10) }; }
+        }
     }
     const added = makeContacts(inst, end);
     if (added) setTimeout(() => toast(`📱 通訊器多了 ${added} 位聯絡人`, 'success'), 600);
@@ -736,6 +750,76 @@ function sideText(src) {
     });
     t += '支線中男主可以死亡；若主線中他的處境來自死亡或異變（化為非人、被詛咒、墮落、成為傳說），支線就要寫到那一步的起點。\n';
     t += '依〈主線與支線的時間〉：支線發生在他的過去，她的身份卡可以和主線不同；她在支線中的行動，會成為他在主線中性格、執念或處境的起因。選項與正文都不得透露這是誰的過去。\n';
+    return t;
+}
+
+// ── 重訪：主線與他的支線都通關後，花碎片回去找他 ──
+function revisitElapsed(r) {
+    return Math.max(0, (Date.now() - (r.left_ts || Date.now())) / 86400000) * (r.ratio || 50);
+}
+
+function recordRevisits(inst, end) {
+    const s = S();
+    if (!Array.isArray(s.revisits)) s.revisits = [];
+    const fates = Array.isArray(end.cast_fate) ? end.cast_fate : [];
+    const L = diffLetter(inst.difficulty);
+    for (const c of inst.cast.filter(x => x.role === '主要')) {
+        const f = fates.find(x => x.codename === c.codename);
+        if (f && f.alive === false) continue;
+        const key = inst.id + ':' + c.codename;
+        const old = s.revisits.find(r => r.key === key);
+        const snap = {
+            key, instance_id: inst.id, instance_name: inst.name, worldline: inst.worldline, ending: inst.status,
+            codename: c.codename, real_name: c.real_name, revealed: !!c.revealed, identity: c.identity, cover: c.cover,
+            appearance: c.appearance, this_life: c.this_life, personality: f?.personality || '', calls_her: f?.calls_her || '',
+            story: f?.story || '', state: f?.state || '', last_moment: f?.last_moment || '',
+            relation_type: c.relation_type, history_length: c.history_length, promise: c.promise, remnant: c.remnant,
+            aftermath: c.aftermath, birthplace: c.birthplace, seat: c.seat, habits: clone(c.habits), courtship: c.courtship,
+            balance: c.balance ?? null, balance_type: c.balance_type || '', dark_origin: clone(c.dark_origin),
+            world: { scope: clone(inst.world_scope), change: clone(inst.world_change), era: clone(inst.era), history: inst.world_file?.history || '', nations: clone(inst.world_file?.nations || []) },
+            ratio: PHONE_RATIO[L] || 50, left_ts: Date.now(), side_done: old?.side_done || false, visits: old?.visits || 0, settled: old?.settled || '',
+        };
+        if (old) Object.assign(old, snap); else s.revisits.push(snap);
+    }
+}
+
+function markSideDone(inst) {
+    const s = S();
+    const side = C()?.seed?.side;
+    const fromId = side?.from?.instance_id;
+    const names = new Set(inst.cast.map(c => c.real_name).filter(Boolean));
+    let n = 0;
+    for (const r of s.revisits || []) {
+        if (fromId && r.instance_id !== fromId) continue;
+        if ((side?.target_code && r.codename === side.target_code) || (r.real_name && names.has(r.real_name))) { if (!r.side_done) n++; r.side_done = true; }
+    }
+    return n;
+}
+
+function revisitText(r) {
+    const name = r.revealed && r.real_name ? r.real_name : r.codename;
+    let t = '\n【重訪｜這次不是一般的副本】\n';
+    t += `{{user}} 花了碎片，主動回到《${r.instance_name}》的世界去找他。這個世界與他的資料沿用當時的紀錄，世界名、國名、地名、語言不得改變。\n`;
+    t += `她上一次離開時的結局：${r.ending}。她離開後，他的世界已經過了 ${fmtDays(revisitElapsed(r))}。\n`;
+    t += `他：${r.codename}${r.real_name ? `（${r.real_name}）` : ''}｜真實身份：${r.identity || ''}${r.cover ? `｜曾經的偽裝：${r.cover}` : ''}\n`;
+    t += line('  外型', r.appearance) + line('  此世性格', r.this_life || r.personality) + line('  他怎麼稱呼她', r.calls_her);
+    t += line('  你們的故事', r.story) + line('  她離開時他的處境', r.state) + line('  最後的相處', r.last_moment);
+    t += line('  承諾', r.promise) + line('  殘留', r.remnant) + line('  她消失後他做過的事', r.aftermath) + line('  他的權勢', r.seat);
+    if (r.balance !== null && r.balance !== undefined) t += `  她離開時他心裡的天秤：${r.balance}（${r.balance_type || '傾向未定'}）\n`;
+    if (r.world?.scope?.world_name) t += `世界：${r.world.scope.world_name}｜${(r.world.scope.regions || []).map(x => x.name).join('、')}\n`;
+    if (r.world?.change?.what) t += `她離開時的世界：${r.world.change.what}\n`;
+    t += `
+重訪的原則：
+- 他一直守在原地。這些年他沒有找其他人，寧願一個人等，也不要別人。等待在他身上留下了痕跡：習慣、身體、處境、他對世界做過的事。
+- 他知道她是誰，也知道她總有一天會消失。這次不用再隱藏身份、不用再演。
+- 依上一次的結局決定這次的基調：好結局離開的，以重逢與相處為主，沒有主線危機，節奏放慢；苦澀、共墮、被強制召回的，世界因為他又變了，這次的任務是面對這個結果。
+- 時間流逝依他的處境：她離開越久，他越可能變得更沉默、更偏執，或把自己活成了她記得的樣子。
+- 重訪的最後，她必須做出選擇：留在這個世界，或好好道別。這個選擇由玩家決定，AI 不得替她選。
+- 留下：她放棄回到現實，永遠留在他身邊。結局 result 填「留下」。
+- 道別：這次她能好好說再見，他也知道她會再回來。結局 result 填「道別」。
+- 開局資料的 cast 只需要寫他，以及這些年他身邊重要的人；line_type 填「重訪」。
+- 身份卡：她以自己回來，他認得她。世界為她的歸來補上一個合理的位置，可以沿用她上次在這裡的身份。
+`;
     return t;
 }
 
@@ -857,14 +941,15 @@ function buildStateText() {
         if (sd.name || sd.type) t += '※ 以上標示「已選定」的項目是玩家在白域大廳選好的副本，開局資料必須沿用，不得更改。\n';
         if (s.playerProfile?.trim()) t += '\n【玩家本人檔案】（{{user}} 本人的能力、體質、習慣與禁忌，不因身份卡改變；生成身份卡時需考慮與此的落差）\n' + s.playerProfile.trim() + '\n';
         t += '最近三個副本（防重複對照，三軸與男主身份類別不得重複）：\n' + recentText();
-        if (sd.side) t += sideText(sd.side);
+        if (sd.revisit) t += revisitText(sd.revisit);
+        else if (sd.side) t += sideText(sd.side);
         else if (!String(sd.line_type || '').includes('支線')) t += exclusionText();
         t += worldlineSealedText();
-        if (!sd.status || sd.status === 'auto') { sd.status_rolled = sd.status_rolled || rollStatus(); }
-        const tierKey = sd.status && sd.status !== 'auto' ? sd.status : sd.status_rolled;
+        if (!sd.revisit && (!sd.status || sd.status === 'auto')) { sd.status_rolled = sd.status_rolled || rollStatus(); }
+        const tierKey = sd.revisit ? '' : (sd.status && sd.status !== 'auto' ? sd.status : sd.status_rolled);
         if (STATUS_TIERS[tierKey]) t += `\n【她的身份階層｜${sd.status && sd.status !== 'auto' ? '玩家指定' : '插件抽籤'}，必須遵守】${STATUS_TIERS[tierKey][0]}：${STATUS_TIERS[tierKey][1]}。身份卡的 status_tier 填「${STATUS_TIERS[tierKey][0]}」。\n`;
-        t += '\n【身份卡要求】她的身份卡從這個世界、主線任務與梗型中長出來，不從玩家本人檔案的專長推導：不得因為她會設計、繪畫、排版、攝影、剪輯，就讓她的身份是畫師、彩繪師、壁畫工、油漆工、抄寫員、設計師這類職業。她的專長是她在任何身份下都帶得走的能力，在劇情中意外派上用場。身份卡不得與最近三個副本的身份卡相近（插件附在上方紀錄中）。\n';
-        if (!String(sd.line_type || '').includes('支線') && !sd.side) {
+        if (!sd.revisit) t += '\n【身份卡要求】她的身份卡從這個世界、主線任務與梗型中長出來，不從玩家本人檔案的專長推導：不得因為她會設計、繪畫、排版、攝影、剪輯，就讓她的身份是畫師、彩繪師、壁畫工、油漆工、抄寫員、設計師這類職業。她的專長是她在任何身份下都帶得走的能力，在劇情中意外派上用場。身份卡不得與最近三個副本的身份卡相近（插件附在上方紀錄中）。\n';
+        if (!String(sd.line_type || '').includes('支線') && !sd.side && !sd.revisit) {
             t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n每位主要男主都必須填：cover（偽裝身份）、identity（真實身份，以來歷與做過的事定義）、birthplace（出生與成長之地）、seat（權勢在世界上的來源）、aftermath、world_mark。這些欄位不得省略。\n';
         }
         t += '\n' + OPEN_TAG_SPEC + '\n';
@@ -877,7 +962,8 @@ function buildStateText() {
     if (cs.mode === 'settle') {
         t += '【副本已結束｜結算】\n';
         t += `副本：${inst.name}｜結果：${inst.status}\n`;
-        t += '請以結算場景收尾：{{user}} 被召回白域大廳，無語進行結算。依結果給予獎勵等級與碎片，不得美化失敗。\n';
+        if (/留下/.test(inst.status)) t += '她選擇留在這個世界。請寫這個選擇的結局：系統的召回沒有來，或被她拒絕；無語的道別；她與他往後的日子。這是她在這條世界線的終局。\n';
+        else t += '請以結算場景收尾：{{user}} 被召回白域大廳，無語進行結算。依結果給予獎勵等級與碎片，不得美化失敗。\n';
         return t;
     }
 
@@ -887,6 +973,9 @@ function buildStateText() {
     if (inst.hook) t += `主線任務：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
+    if (String(inst.line_type || '').includes('重訪') && C()?.seed?.revisit) {
+        t += `【重訪中】這是她主動回來找 ${C().seed.revisit.codename} 的旅程。他一直守在原地，知道她是誰、也知道她會離開。最後由她選擇：留下，或好好道別。\n`;
+    }
     const ws = inst.world_scope;
     if (ws?.world_name || ws?.regions?.length) {
         t += `世界：${ws.world_name || ''}${ws.scale ? `（${ws.scale}）` : ''}。這是一個獨立於地球之外的完整世界，舞台之外的國家與地區都在運作。\n`;
@@ -1024,6 +1113,7 @@ function buildStateText() {
         t += `這個階段的她：${st[2]}\n`;
         if (inst.pollution_notes?.length) t += `近期的汙染表現：${inst.pollution_notes.slice(-3).join('；')}\n`;
         t += '依〈黑化〉的精神汙染規則書寫：汙染要被呈現為汙染，讓玩家看得出她被影響；她抵抗時汙染下降。以 pollution_delta 回報變化。\n';
+        if ((inst.pollution || 0) >= 40 && inst.pollution_source) t += `⚠ 獨佔狀態：她的汙染明顯來自「${inst.pollution_source}」。與她直接互動的男主只能是他，出場輪替與「連續出現須離場」的限制對他暫停；其他男主只以傳聞、痕跡、幕後行動或被他擋在外面的方式存在。汙染度降到 40 以下時解除。\n`;
     }
 
     if (inst.concessions.length) {
@@ -1576,7 +1666,7 @@ function mainCount(inst) {
 }
 
 function needMoreCast(inst) {
-    return inst && !String(inst.line_type || '').includes('支線') && mainCount(inst) < 2;
+    return inst && !/支線|重訪/.test(String(inst.line_type || '')) && mainCount(inst) < 2;
 }
 
 async function genMoreCast(manual = false) {
@@ -2677,7 +2767,19 @@ function renderWorlds() {
         <div class="nova-inf-item"><b>${esc(w.coordinate)}</b>｜${esc(w.record_wall_text)}${w.anomaly ? '｜<span class="nova-inf-warn">異常</span>' : ''}
         <div class="nova-inf-sub">升級：${sealedVal(w.upgrade_status)}｜條件：${sealedVal(w.open_condition)}</div>
         <div class="nova-inf-row">${btn('wl_del', '🗑 刪除這條世界線', `data-i="${i}"`, 'danger')}</div></div>`).join('');
-    return card('通關帳本', ledgerHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_ledger', '編輯')) +
+    const rv = (s.revisits || []).filter(r => r.side_done);
+    const pending = (s.revisits || []).filter(r => !r.side_done).length;
+    const cost = Number(s.revisitCost) || 0;
+    const rvHtml = rv.map(r => {
+        const nm = r.revealed && r.real_name ? r.real_name : r.codename;
+        return `<div class="nova-inf-item"><b>${esc(nm)}</b>｜《${esc(r.instance_name)}》｜上次結局：${esc(r.ending)}
+            <div class="nova-inf-sub">他那邊已過 ${fmtDays(revisitElapsed(r))}｜重訪過 ${r.visits || 0} 次${r.settled === 'stay' ? '｜<b>你留在了這裡</b>' : ''}</div>
+            ${r.settled === 'stay' ? '' : `<div class="nova-inf-row">${btn('revisit_go', `回去找他（${cost} 碎片）`, `data-key="${esc(r.key)}" ${(s.inventory.shards || 0) < cost ? 'disabled' : ''}`, 'primary')}</div>`}</div>`;
+    }).join('');
+    const rvCard = card('🕯 重訪', (s.finale ? `<p>終局：你選擇留在《${esc(s.finale.world)}》，留在 ${esc(s.finale.name)} 身邊（${esc(s.finale.date)}）。</p>` : '') +
+        (rvHtml || '<p class="nova-inf-empty">還沒有可以重訪的人。</p>') +
+        `<p class="nova-inf-hint">主線和他的支線都通關後，就能花碎片回去找他。${pending ? `還有 ${pending} 位男主的支線沒有通關。` : ''}碎片：${s.inventory.shards || 0}</p>`);
+    return rvCard + card('通關帳本', ledgerHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_ledger', '編輯')) +
         card('世界線紀錄牆', wlHtml || '<p class="nova-inf-empty">尚無紀錄</p>', btn('edit_worldlines', '編輯')) +
         `<div class="nova-inf-danger-zone"><b>清除資料</b>
         <p class="nova-inf-hint">測試用。刪掉的資料無法復原，建議先到「設定」匯出備份。</p>
@@ -2879,6 +2981,7 @@ function renderSettingsTab() {
         <p class="nova-inf-hint">金鑰存在酒館的設定檔裡，匯出備份時不會包含。</p>` : ''}`) +
         card('男主人生檔案', `
         <label class="nova-inf-label"><input type="checkbox" data-set="autoDossier" ${s.autoDossier ? 'checked' : ''}> 開局後自動在背景生成（男主的目標、仇人、身邊的人、紀念日、習慣、黑化起源，以及世界檔案）</label>
+        <label class="nova-inf-label">重訪一次要花的碎片<input class="nova-inf-input" type="number" min="0" data-set="revisitCost" value="${s.revisitCost ?? 50}"></label>
         <label class="nova-inf-label">在白域清理汙染要花的碎片（0 為免費）<input class="nova-inf-input" type="number" min="0" data-set="pollutionCleanCost" value="${s.pollutionCleanCost || 0}"></label>
         <label class="nova-inf-label">每幾回合請 AI 回報男主的幕後行動<input class="nova-inf-input" type="number" min="3" data-set="offscreenEvery" value="${s.offscreenEvery || 6}"></label>`) +
         card('插件設定', `
@@ -3092,10 +3195,28 @@ function onBodyClick(ev) {
         case 'next_side': {
             const lm = s.lastMain;
             const c = lm?.cast?.find(x => x.codename === b.dataset.c);
-            goNext({ kind: 'side', target: c ? `${c.codename}${c.real_name ? `（${c.real_name}）` : ''}` : '', from: clone(lm) });
+            goNext({ kind: 'side', target: c ? `${c.codename}${c.real_name ? `（${c.real_name}）` : ''}` : '', target_code: c?.codename || '', from: clone(lm) });
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'revisit_go': {
+            const r = (s.revisits || []).find(x => x.key === b.dataset.key);
+            const cost = Number(s.revisitCost) || 0;
+            if (!r) break;
+            if ((s.inventory.shards || 0) < cost) { toast(`碎片不足，重訪需要 ${cost} 碎片`, 'warning'); break; }
+            if (!confirm(`花 ${cost} 碎片，回到《${r.instance_name}》去找他？\n${cs.instance && !cs.instance.ended ? '這個聊天裡還有進行中的副本，會被清掉。' : ''}`)) break;
+            (async () => {
+                s.inventory.shards -= cost;
+                if (s.hideOld) await hideOldMessages();
+                cs.mode = 'opening';
+                cs.instance = null; cs.options = []; cs.next = null; cs.lock = false; cs.rolled = [];
+                cs.seed = { name: `重訪：${r.instance_name}`, line_type: '重訪', difficulty: '重訪', revisit: clone(r) };
+                cs.openingSince = ctx().chat?.length || 0;
+                commit();
+                toast('在這個聊天送出下一則訊息，就會回到他的世界', 'success');
+            })();
+            break;
+        }
         case 'more_cast': genMoreCast(true); break;
         case 'gen_world': if (!inst?.world_file || confirm('重新生成會覆蓋目前的世界檔案，確定嗎？')) genWorldFile(true); break;
         case 'pol_clean': {
