@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.19.2
+// Nova 無限流面板 v0.19.3
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -565,6 +565,7 @@ function endInstance(end) {
         instance_id: inst.id, name: inst.name, hook: inst.hook || '', hook_type: inst.hook_type || '', worldline: inst.worldline, line_type: inst.line_type,
         difficulty: inst.difficulty, axes: clone(inst.axes),
         cast_categories: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, category: c.category, identity: c.identity })),
+        her_role: [inst.identity_card?.social_role, inst.identity_card?.name].filter(Boolean).join('／'),
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
         days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0, real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
@@ -767,7 +768,7 @@ function recentText() {
     const usedTypes = recent.map(l => l.hook_type).filter(Boolean);
     return (usedTypes.length ? `最近三個副本用過的梗型（不得再用）：${usedTypes.join('、')}\n` : '') +
         `最近五個副本中高頻梗使用次數：${hi}\n` + recent.map(l =>
-        `- ${l.name}${l.hook ? `「${l.hook}」` : ''}${l.hook_type ? `［${l.hook_type}］` : ''}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}`
+        `- ${l.name}${l.hook ? `「${l.hook}」` : ''}${l.hook_type ? `［${l.hook_type}］` : ''}｜${l.difficulty}｜${l.axes?.type}/${l.axes?.world}/${l.axes?.mechanic || '無'}｜男主身份類別：${(l.cast_categories || []).map(c => `${c.real_name || c.codename}(${c.category})`).join('、')}${l.her_role ? `｜她的身份卡：${l.her_role}` : ''}`
     ).join('\n') + '\n';
 }
 
@@ -825,6 +826,7 @@ function buildStateText() {
         if (sd.side) t += sideText(sd.side);
         else if (!String(sd.line_type || '').includes('支線')) t += exclusionText();
         t += worldlineSealedText();
+        t += '\n【身份卡要求】她的身份卡從這個世界、主線任務與梗型中長出來，不從玩家本人檔案的專長推導：不得因為她會設計、繪畫、排版、攝影、剪輯，就讓她的身份是畫師、彩繪師、壁畫工、油漆工、抄寫員、設計師這類職業。她的專長是她在任何身份下都帶得走的能力，在劇情中意外派上用場。身份卡不得與最近三個副本的身份卡相近（插件附在上方紀錄中）。\n';
         if (!String(sd.line_type || '').includes('支線') && !sd.side) {
             t += '\n【卡司硬性要求】主線副本的主要男主必須 2–3 人（cast 中 role 填「主要」），ASTRIØN／PARALLAX／VELION 各至少一人；次要男主 0–2 人。只寫一位主要男主視為錯誤。尚未在正文登場的男主，也要寫進 cast（可以是隱藏存在或之後才登場）。\n';
         }
