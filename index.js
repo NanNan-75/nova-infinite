@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.18.1
+// Nova 無限流面板 v0.19.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -174,6 +174,7 @@ function blankInstance() {
         after_pollution: 0, after_source: '', after_from: '',
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
+        world_scope: null,
         map: { regions: [] }, location: '',
         daily_life: [],
         ended: false,
@@ -291,6 +292,7 @@ function applyOpen(obj) {
     inst.glossary = (obj.glossary || []).map(g => ({ term: g.term || '', desc: g.desc || '', revealed: true }));
     if (obj.era) inst.era = Object.assign(inst.era, obj.era);
     if (obj.world_change) inst.world_change = Object.assign({ what: '', before: '', cause: '' }, obj.world_change);
+    if (obj.world_scope && typeof obj.world_scope === 'object') inst.world_scope = obj.world_scope;
     inst.map.regions = (obj.map?.regions || []).map(normRegion);
     inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
     inst.daily_life = (obj.daily_life || []).map(normLife);
@@ -326,7 +328,7 @@ function normCast(c) {
         codename: '', identity: '', category: '', role: '主要', resource: '', friction: '', this_life: '', appearance: '', revealed: false,
         real_name: '', affinity: 100, history_length: '', relation_type: '', influence: '', remnant: '', promise: '', obsession_stage: '',
         cover: '', unmasked: false, slips: [],
-        aftermath: '', world_mark: '', mark_seen: false,
+        aftermath: '', world_mark: '', mark_seen: false, seat: '',
         long_goal: '', short_goal: '', short_goal_act: 0, goal_conflict: '', enemies: [], inner_circle: [], anniversary: null, offscreen: [],
         balance: null, balance_type: '', balance_log: [], dark_origin: null, habits: null,
         last_seen_turn: 0,
@@ -609,7 +611,7 @@ function endInstance(end) {
             world: inst.axes?.world || '', era: clone(inst.era), world_change: clone(inst.world_change || {}),
             mechanic: inst.axes?.mechanic || '', hook: inst.hook || '', residue: end.residue || '',
             regions: (inst.map?.regions || []).map(r => r.name).filter(Boolean),
-            world_file: clone(inst.world_file),
+            world_file: clone(inst.world_file), world_scope: clone(inst.world_scope),
             cast: inst.cast.map(c => ({ codename: c.codename, real_name: c.real_name, identity: c.identity, role: c.role, revealed: !!c.revealed, relation_type: c.relation_type, history_length: c.history_length, aftermath: c.aftermath, world_mark: c.world_mark, dark_origin: clone(c.dark_origin) })),
         };
     }
@@ -706,6 +708,7 @@ function sideText(src) {
     if (wc.what) t += `主線中的現狀（支線要埋下通往這裡的種子，不得提前發生）：${wc.what}\n`;
     if (wc.cause) t += `崩壞的真正起因：${wc.cause}\n`;
     if (lm.regions?.length) t += `主線中出現過的地區：${lm.regions.join('、')}\n`;
+    if (lm.world_scope?.world_name) t += `世界：${lm.world_scope.world_name}｜版圖沿用：${(lm.world_scope.regions || []).map(r => r.name).join('、')}（國名與語言不變，只是當時的局勢不同）\n`;
     t += worldFileText(lm.world_file, true);
     if (lm.mechanic) t += `主線中折磨她的世界規則／機制：${lm.mechanic}\n`;
     if (lm.residue) t += `她身上還帶著主線留下的殘留：${lm.residue}。支線中這個殘留會自然出現（她自己停不下來、改不掉），男主會注意到並記住。\n`;
@@ -845,6 +848,12 @@ function buildStateText() {
     if (inst.hook) t += `主線任務：${inst.hook}\n`;
     t += `副本：${inst.name}（${inst.line_type}｜${inst.difficulty} 級｜世界線 ${inst.worldline}）\n`;
     t += `三軸：${inst.axes.type}／${inst.axes.world}／${inst.axes.mechanic || '無'}${inst.axes.mechanic && !inst.mechanic_revealed ? '（機制尚未向玩家揭露）' : ''}\n`;
+    const ws = inst.world_scope;
+    if (ws?.world_name || ws?.regions?.length) {
+        t += `世界：${ws.world_name || ''}${ws.scale ? `（${ws.scale}）` : ''}。這是一個獨立於地球之外的完整世界，舞台之外的國家與地區都在運作。\n`;
+        if (ws.regions?.length) t += `  版圖：${ws.regions.map(r => `${r.name}（${[r.polity, r.language].filter(Boolean).join('｜')}）`).join('；')}\n`;
+        if (ws.stage) t += `  這次的舞台：${ws.stage}\n`;
+    }
     const wc = inst.world_change || {};
     if (wc.what || wc.before) {
         if (String(inst.line_type || '').includes('支線')) {
@@ -913,6 +922,7 @@ function buildStateText() {
                 t += `- 代號「${c.codename}」｜${c.identity}｜${c.role}｜${c.category} 類｜資源：${c.resource}｜摩擦：${c.friction}｜真名${c.revealed ? '已揭露' : '未揭露（正文不得出現真名）'}${c.cover ? `｜曾以「${c.cover}」的身份隱藏，已揭露` : ''}\n`;
             }
             if (c.appearance) t += `  外型（全副本保持一致）：${c.appearance}\n`;
+            if (c.seat) t += `  ${c.cover && !c.unmasked ? '【封存】' : ''}權勢在世界上的來源：${c.seat}\n`;
             if (c.aftermath) t += `  【封存】她消失後他做的事：${c.aftermath}\n`;
             if (c.long_goal || c.short_goal) {
                 t += `  【封存】長期目標：${c.long_goal || '未定'}｜本幕短期目標：${c.short_goal || '未定'}${(c.short_goal_act || 0) < (inst.current_act || 1) ? '（⚠ 已進入新的一幕，請以 cast_update 更新 short_goal）' : ''}`;
@@ -1387,6 +1397,7 @@ function mergeOpen(obj) {
     if (empty(inst.daily_life) && obj.daily_life?.length) { inst.daily_life = obj.daily_life.map(normLife); filled.push('生活'); }
     if (!inst.identity_card?.name && obj.identity_card) { inst.identity_card = Object.assign(inst.identity_card || {}, obj.identity_card); filled.push('身份卡'); }
     if (!inst.world_change?.what && obj.world_change) { inst.world_change = Object.assign({ what: '', before: '', cause: '' }, obj.world_change); filled.push('世界的崩壞'); }
+    if (!inst.world_scope && obj.world_scope) { inst.world_scope = obj.world_scope; filled.push('世界版圖'); }
     if (!inst.era?.tech_level && obj.era) { inst.era = Object.assign(inst.era || {}, obj.era); filled.push('時代'); }
     return filled.length ? `補上了：${filled.join('、')}` : '沒有需要補的欄位';
 }
@@ -1567,6 +1578,8 @@ async function genMoreCast(manual = false) {
 const WORLD_SPEC = `<inf_world>
 {
   "history": "崩壞之前，這個世界的歷史、文明、權力結構與它自己的問題（四到六句，男主之外的事）",
+  "nations": [{"name": "國家／大洲／星域名（沿用開局的版圖並補足）", "polity": "政體與掌權者", "language": "語言與文字", "culture": "風俗、信仰、審美的一兩句", "relation": "與其他地方的關係：同盟、敵對、貿易、隔絕"}],
+  "languages": [{"name": "語言名", "where": "在哪裡使用", "note": "她聽起來的感覺、通用程度、是否有身份卡賦予的理解"}],
   "timeline": [{"when": "她消失後第幾年／第幾個月", "event": "這段時間世界發生的大事，包含與男主無關的事"}],
   "factions": [{"name": "勢力名", "goal": "它自己的目的", "stance_on_collapse": "它如何看待、利用或對抗這場崩壞", "related_cast": "與哪位男主有關；無關就留空"}],
   "ordinary_life": "崩壞之後，一般人怎麼過日子：吃什麼、怕什麼、信什麼、做什麼工作、孩子在學什麼（三到五句）",
@@ -1589,6 +1602,8 @@ async function genWorldFile(manual = false) {
 - 這個世界在男主之外，有它自己的歷史、勢力、經濟、信仰與危機。男主造成的改變，是落在一個本來就在運轉的世界上。
 - 她消失後經過的歲月要有重量：制度改變、新的勢力崛起、一代人長大、人們習慣了崩壞後的生活。
 - 勢力至少一半與男主無關，各有自己的目的；有人從崩壞中得利。
+- 這是一個獨立於地球之外的完整世界：有自己的世界名、多個國家或大洲（星際則是星域、星系、種族政權）、各自的語言與文化。舞台只是其中一角。
+- 沿用開局的版圖（world_scope），不得改名或刪除，只能補充。
 - 若為童話改寫，善用原作中較少被提及的地區、人物與設定，擴展原作的世界，而不是只用最有名的地點。
 只輸出下列格式，不要輸出任何其他文字：
 ${WORLD_SPEC}`);
@@ -1611,6 +1626,8 @@ function worldFileText(wf, side = false) {
     if (!wf) return '';
     let t = side ? '\n【世界檔案（主線時建立，支線發生在崩壞之前）】\n' : '\n【封存｜世界檔案】（世界在男主之外的份量；依劇情需要讓她逐步接觸）\n';
     if (wf.history) t += `崩壞之前：${wf.history}\n`;
+    if (!side && wf.nations?.length) t += `國家與地區：${wf.nations.map(n => `${n.name}（${[n.polity, n.language, n.relation].filter(Boolean).join('｜')}）`).join('；')}\n`;
+    if (!side && wf.languages?.length) t += `語言：${wf.languages.map(l => `${l.name}｜${l.where}${l.note ? '｜' + l.note : ''}`).join('；')}\n`;
     if (side) return t + (wf.factions?.length ? `勢力（主線時的樣子，支線中是它們的前身）：${wf.factions.map(f => f.name + '｜' + f.goal).join('；')}\n` : '');
     if (wf.timeline?.length) t += `她消失後的歲月：${wf.timeline.map(x => `${x.when}：${x.event}`).join('；')}\n`;
     if (wf.factions?.length) t += `勢力：${wf.factions.map(f => `${f.name}（${f.goal}｜對崩壞：${f.stance_on_collapse}${f.related_cast ? '｜' + f.related_cast : ''}）`).join('；')}\n`;
@@ -2532,7 +2549,14 @@ function renderWorldMap() {
     const regions = inst.map?.regions || [];
     const life = inst.daily_life || [];
     const wf = inst.world_file;
-    const wfCard = card('🌍 世界檔案', wf ? (peek ? `
+    const ws = inst.world_scope;
+    const scopeCard = ws ? card(`🪐 ${esc(ws.world_name || '這個世界')}`, `
+        ${ws.scale ? `<p class="nova-inf-sub">${esc(ws.scale)}</p>` : ''}
+        ${(wf?.nations?.length ? wf.nations : (ws.regions || [])).map(r => `<div class="nova-inf-item"><b>${esc(r.name)}</b>
+            <div class="nova-inf-sub">${esc([r.polity, r.language].filter(Boolean).join('｜'))}</div>
+            ${r.culture || r.note ? `<div class="nova-inf-sub">${esc(r.culture || r.note)}</div>` : ''}</div>`).join('')}
+        ${ws.stage ? `<p class="nova-inf-hint">這次的舞台：${esc(ws.stage)}</p>` : ''}`) : '';
+    const wfCard = scopeCard + card('🌍 世界檔案', wf ? (peek ? `
         ${wf.history ? `<p class="nova-inf-sub">崩壞之前：${esc(wf.history)}</p>` : ''}
         ${wf.timeline?.length ? `<p class="nova-inf-sub">歲月：${wf.timeline.map(x => esc(x.when + '｜' + x.event)).join('<br>')}</p>` : ''}
         ${wf.factions?.length ? `<p class="nova-inf-sub">勢力：${wf.factions.map(f => esc(f.name + '：' + f.goal)).join('<br>')}</p>` : ''}
