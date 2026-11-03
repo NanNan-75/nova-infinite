@@ -1,4 +1,4 @@
-// Nova 無限流面板 v0.20.2
+// Nova 無限流面板 v0.21.0
 // SillyTavern 第三方擴充：管理無限流副本狀態、依模式注入規則與資料、隱藏封存資訊。
 
 import { DEFAULT_RULES, OPEN_TAG_SPEC, TURN_TAG_SPEC, OPTIONS_TAG_SPEC } from './rules.js';
@@ -21,7 +21,7 @@ const MODES = {
 const RULE_MODES = { lobby: '白域大廳', opening: '副本開局', instance: '副本進行中', settle: '結算', phone: '通訊器' };
 
 const SEALED_CAST_KEYS = ['this_life', 'real_name', 'affinity', 'history_length', 'relation_type', 'influence', 'remnant', 'promise', 'obsession_stage',
-    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary', 'balance', 'balance_type', 'balance_log', 'dark_origin', 'habits', 'courtship', 'wound'];
+    'aftermath', 'long_goal', 'short_goal', 'goal_conflict', 'enemies', 'inner_circle', 'offscreen', 'anniversary', 'balance', 'balance_type', 'balance_log', 'dark_origin', 'habits', 'courtship', 'wound', 'mortality'];
 const SEALED_PEOPLE_KEYS = ['hidden_truth'];
 const SEALED_FACTION_KEYS = ['true_goal', 'related'];
 const SEALED_THREAD_KEYS = ['target'];
@@ -173,6 +173,7 @@ function blankInstance() {
         glossary: [], concessions: [], threads: [],
         pollution: 0, pollution_source: '', pollution_notes: [],
         world_events: [], last_offscreen: 0, dossier_done: false, world_file: null, lies: [],
+        route: null,   // 共通線／個人線：{ branch_act, phase, lead, path, stance_act, stance }
         after_pollution: 0, after_source: '', after_from: '',
         era: { tech_level: '', anachronism: '' },
         world_change: { what: '', before: '', cause: '' },
@@ -298,6 +299,7 @@ function applyOpen(obj) {
     inst.map.regions = (obj.map?.regions || []).map(normRegion);
     inst.location = obj.map?.start || inst.map.regions[0]?.name || '';
     inst.daily_life = (obj.daily_life || []).map(normLife);
+    setupRoute(inst);
     const bl = diffLetter(inst.difficulty);
     if (BALANCE_START[bl] !== undefined) inst.cast.forEach(c => { if (c.role === '主要' && (c.balance === null || c.balance === undefined)) c.balance = BALANCE_START[bl]; });
     // 從副本中途開始（測試或時間跳躍開局）
@@ -552,9 +554,53 @@ function applyTurn(o) {
     return log.join('、');
 }
 
+const ENDING_TABLE = `
+【終幕｜結局判定】依以下四件事判定結局，並在 instance_end 的 ending_reason 寫出判定理由：
+主線任務（完成／部分完成／失敗）、他的結果（被拯救／維持原狀／暗墮／死亡）、你們的關係（承諾是否兌現、心意是否說出口、天秤停在哪裡）、她自己（汙染度、是否活著離開）。
+- 真結局：走真相線；主線完成；他被拯救；承諾兌現。
+- 好結局：主線完成；他被拯救或得到安頓，但有人付出了代價。
+- 普通結局：主線完成，但關係停在半路，該說的話沒說。
+- 開放結局：有一件大事沒有解決：主線還差一步、他的結局懸而未決，或她在關鍵時刻被召回。
+- 壞結局：主線失敗、他死去或徹底失控、她死亡，或世界崩壞。
+- 特殊結局：共墮通關、共墮滯留、弒他（她在終幕親手對他動手）。
+cast_fate 中每位男主都要有自己的結局（ending 欄位），包括沒有被選擇的男主：他們在背景中做了什麼、最後走到哪裡。
+`;
+
+// ── 路線：共通線 → 分歧點 → 個人線（真相線／暗墮線）→ 終幕 ──
+function setupRoute(inst) {
+    const L = diffLetter(inst.difficulty);
+    const lt = String(inst.line_type || '');
+    if (!['B', 'A', 'S'].includes(L) || /支線|重訪/.test(lt) || (inst.total_acts || 0) < 4) { inst.route = null; return; }
+    const branch = Math.floor(inst.total_acts / 2);
+    const personal = inst.total_acts - branch;
+    inst.route = { branch_act: branch, phase: 'common', lead: '', path: '', stance_act: branch + Math.ceil(personal / 2), stance: '' };
+}
+
+function routeLeadName(inst) {
+    const c = inst.cast.find(x => x.codename === inst.route?.lead);
+    return c ? (c.revealed && c.real_name ? c.real_name : c.codename) : '';
+}
+
+// 到了分歧點或暗墮線的抉擇點，沒有選擇就不能前進
+function routeGate(inst) {
+    const r = inst.route;
+    if (!r) return '';
+    if (inst.current_act === r.branch_act && !r.lead) return 'branch';
+    if (r.path === 'dark' && inst.current_act === r.stance_act && !r.stance) return 'stance';
+    return '';
+}
+
 function advanceAct(log = []) {
     const inst = C().instance;
     if (!inst) return;
+    const gate = routeGate(inst);
+    if (gate) {
+        inst.act_progress = 100;
+        inst.route.phase = gate === 'branch' ? 'branch' : inst.route.phase;
+        log.push(gate === 'branch' ? '🔀 到了分歧點：請在總覽選擇路線' : '⚖ 暗墮線的抉擇：請在總覽選擇');
+        setTimeout(() => toast(gate === 'branch' ? '🔀 分歧點到了！請到面板總覽選擇要走誰的線、真相還是暗墮' : '⚖ 暗墮線的抉擇到了！請到面板總覽選擇阻止他，還是跟著他', 'warning'), 500);
+        return;
+    }
     const a = inst.acts.find(x => x.number === inst.current_act);
     if (a) a.done = true;
     if (inst.current_act < inst.total_acts) {
@@ -582,7 +628,9 @@ function endInstance(end) {
         her_role: [inst.identity_card?.social_role, inst.identity_card?.name].filter(Boolean).join('／'),
         her_status: (Object.entries(STATUS_TIERS).find(([, v]) => v[0] === inst.identity_card?.status_tier) || [C()?.seed?.status_rolled || ''])[0],
         result: inst.status, exit_type: end.exit_type || '', reward_tier: end.reward_tier || '',
-        days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0, real_time: end.real_time || inst.real_time || '',
+        days_spent: inst.calendar?.day || 0, pollution: inst.pollution || 0,
+        route: inst.route?.lead ? `${inst.route.lead}｜${inst.route.path === 'truth' ? '真相線' : '暗墮線'}${inst.route.stance ? '｜' + (inst.route.stance === 'stop' ? '阻止他' : '跟著他') : ''}` : '',
+        ending_reason: end.ending_reason || '', real_time: end.real_time || inst.real_time || '',
         date: new Date().toISOString().slice(0, 10),
     });
     const cofallStay = /共墮滯留/.test(inst.status);
@@ -772,7 +820,8 @@ function recordRevisits(inst, end) {
             key, instance_id: inst.id, instance_name: inst.name, worldline: inst.worldline, ending: inst.status,
             codename: c.codename, real_name: c.real_name, revealed: !!c.revealed, identity: c.identity, cover: c.cover,
             appearance: c.appearance, this_life: c.this_life, personality: f?.personality || '', calls_her: f?.calls_her || '',
-            story: f?.story || '', state: f?.state || '', last_moment: f?.last_moment || '',
+            story: f?.story || '', state: f?.state || '', last_moment: f?.last_moment || '', own_ending: f?.ending || '',
+            routed: inst.route?.lead === c.codename,
             relation_type: c.relation_type, history_length: c.history_length, promise: c.promise, remnant: c.remnant,
             aftermath: c.aftermath, birthplace: c.birthplace, seat: c.seat, habits: clone(c.habits), courtship: c.courtship,
             balance: c.balance ?? null, balance_type: c.balance_type || '', dark_origin: clone(c.dark_origin),
@@ -800,7 +849,7 @@ function revisitText(r) {
     const name = r.revealed && r.real_name ? r.real_name : r.codename;
     let t = '\n【重訪｜這次不是一般的副本】\n';
     t += `{{user}} 花了碎片，主動回到《${r.instance_name}》的世界去找他。這個世界與他的資料沿用當時的紀錄，世界名、國名、地名、語言不得改變。\n`;
-    t += `她上一次離開時的結局：${r.ending}。她離開後，他的世界已經過了 ${fmtDays(revisitElapsed(r))}。\n`;
+    t += `她上一次離開時的結局：${r.ending}${r.own_ending ? `｜他自己的結局：${r.own_ending}` : ''}${r.routed === false ? '｜那一次她沒有走他的線' : ''}。她離開後，他的世界已經過了 ${fmtDays(revisitElapsed(r))}。\n`;
     t += `他：${r.codename}${r.real_name ? `（${r.real_name}）` : ''}｜真實身份：${r.identity || ''}${r.cover ? `｜曾經的偽裝：${r.cover}` : ''}\n`;
     t += line('  外型', r.appearance) + line('  此世性格', r.this_life || r.personality) + line('  他怎麼稱呼她', r.calls_her);
     t += line('  你們的故事', r.story) + line('  她離開時他的處境', r.state) + line('  最後的相處', r.last_moment);
@@ -1006,6 +1055,23 @@ function buildStateText() {
     t += `\n【封存｜總真相】${inst.sealed.total_truth}｜幕後：${inst.sealed.mastermind}｜動機：${inst.sealed.motive}\n`;
 
     t += `\n【幕】第 ${inst.current_act} 幕／共 ${inst.total_acts} 幕｜本幕進度 ${inst.act_progress}%\n`;
+    const rt = inst.route;
+    if (rt) {
+        if (!rt.lead) {
+            t += `【路線】目前在共通線（第 1–${rt.branch_act} 幕），主要男主輪替出場。第 ${rt.branch_act} 幕是分歧點${inst.current_act === rt.branch_act ? '，也就是本幕' : ''}：分歧點的最後，劇情要停在她面臨選擇之前——要走誰的線、要知道真相還是讓他暗墮。這個選擇由玩家在插件中決定，不得自行替她選擇或直接進入個人線。\n`;
+        } else {
+            const nm = routeLeadName(inst);
+            t += `【路線】個人線：${rt.lead}（${rt.path === 'truth' ? '真相線' : '暗墮線'}）。互動劇情只聚焦在他身上，出場輪替作廢；其他男主退到背景，以傳聞、痕跡、幕後行動存在，各自推進，終幕時各有自己的結局。\n`;
+            if (rt.path === 'truth') t += '真相線：她知道了真相，劇情圍繞她如何拯救他、把他從黑暗裡拉回來，同時完成主線。\n';
+            else {
+                t += '暗墮線：他徹底暗墮，劇情圍繞暗墮後的他如何把世界推向更深的混亂。\n';
+                if (!rt.stance) t += `第 ${rt.stance_act} 幕結束時，她要再做一次選擇：阻止他，或跟著他。${inst.current_act === rt.stance_act ? '就是本幕：劇情要停在她面臨這個選擇之前，' : '在那之前'}不得預設她的立場，由玩家在插件中決定。\n`;
+                else t += `她的立場：${rt.stance === 'stop' ? '阻止他。她與暗墮的他站在對立面，卻仍是他唯一不會傷害的人。' : '跟著他。她站到他身邊，與他一起把世界推向他想要的樣子；汙染與共墮的可能隨之加深。'}\n`;
+            }
+            if (nm && nm !== rt.lead) t += `（${rt.lead} 即 ${nm}）\n`;
+        }
+        if ((inst.current_act || 1) >= (inst.total_acts || 1)) t += ENDING_TABLE;
+    }
     inst.acts.filter(a => a.number < inst.current_act).forEach(a => {
         t += `- 第 ${a.number} 幕（已解開）：${a.question} → 真相：${a.truth}\n`;
     });
@@ -1063,6 +1129,7 @@ function buildStateText() {
             if (c.anniversary?.label) t += `  【封存】他的紀念日：副本第 ${c.anniversary.day} 天｜${c.anniversary.label}\n`;
             if (c.courtship) t += `  他追求她的方式：${c.courtship}\n`;
             if (c.wound) t += `  【封存】他成長中的傷：${c.wound}\n`;
+            if (c.mortality) t += `  【封存】生死：${c.mortality}\n`;
             if (c.habits) {
                 const hb = c.habits;
                 t += `  這個世界的他的習慣（取代偶像世界的一切習慣與興趣）：興趣：${hb.hobby || ''}｜小動作：${(hb.quirks || []).join('、')}｜心煩時：${hb.comfort || ''}｜偏好：${hb.taste || ''}\n`;
@@ -1104,6 +1171,7 @@ function buildStateText() {
 
     if (pollutionActive(inst) && inst.cast.some(c => c.balance !== null && c.balance !== undefined)) {
         t += '\n【天秤】每位主要男主的天秤依他的傾向與本回合發生的事擺動，以 balance 回報。她的反應是觸發，他的性格決定方向。他的行為強度依「難度上限 × 天秤位置」：天秤越靠右端越接近該難度最極端的做法。\n';
+        if ((inst.current_act || 1) >= (inst.total_acts || 1)) t += '最後一幕：若她已知道真相，她可以選擇對他動手，依〈終幕的刀〉處理；這只能由玩家決定，AI 不得引導或替她選。\n';
         if ((inst.current_act || 1) >= (inst.total_acts || 1)) t += '最後一幕：召回時的戲依天秤決定——偏右的他會試圖阻止她離開；偏左的他會親手送她走或先一步消失；在中間的他，直到召回的瞬間才做出選擇。\n';
     }
     if (pollutionActive(inst)) {
@@ -1587,6 +1655,7 @@ function applyDossier(arr) {
         if (d.habits && typeof d.habits === 'object') c.habits = d.habits;
         if (d.courtship) c.courtship = d.courtship;
         if (d.wound) c.wound = d.wound;
+        if (d.mortality) c.mortality = d.mortality;
         // 開局資料漏掉的欄位：只補空的，不覆蓋
         for (const k of ['birthplace', 'seat', 'cover', 'aftermath', 'world_mark']) if (!c[k] && d[k]) c[k] = d[k];
         if (d.short_goal) c.short_goal_act = inst.current_act || 1;
@@ -1614,6 +1683,7 @@ const DOSSIER_SPEC = `<inf_dossier>
     "inner_circle": [{"name": "心腹、下屬、家人、師父、寵物等", "relation": "與他的關係", "attitude_to_her": "這個人會怎麼對待她（依他的心意而定，但這個人不知道原因）"}],
     "anniversary": {"label": "她消失的那一天在他心中的意義（支線填與她有關的重要日子）", "day": "這一天落在副本第幾天，必須在時限之內"},
     "birthplace": "（僅在開局資料漏掉時填）出生與成長之地", "seat": "（僅在漏掉時填）權勢在世界上的來源", "cover": "（僅在漏掉時填）偽裝身份", "aftermath": "（僅在漏掉時填）她消失後他做的事", "world_mark": "（僅在漏掉時填）這件事留在世界上的痕跡",
+    "mortality": "B 級以上主線才填：他會不會死。會死／不死（不死的原因：詛咒、與某物的交易、神性、非人本體、侵蝕之物的融合……，以及世界上唯一能真正傷到他、或讓他終結的方法）。同一副本中最多一位男主不死",
     "wound": "他在這個世界長大過程中受過的傷：依世界的黑暗面與他的出身而定（例如戰爭孤兒、被拐賣、當過奴隸或童兵、被家族犧牲、在瘟疫或饑荒中失去一切；也可以是加害者那一方的成長）。一兩句，說明這道傷如何塑造了現在的他",
     "courtship": "他重新追求她的方式：在她眼中他們是初識，他得重新讓她喜歡上自己。依性格、身份與權勢設計，具體到做法（送什麼、為她做什麼、怎麼出現在她身邊、怎麼示好或試探）；送禮只是其中一種方式",
     "habits": {"hobby": "他在這個世界的興趣（一到兩項），必須是這個世界真實存在、符合他身份與成長環境的事", "quirks": ["兩三個小習慣或小動作"], "comfort": "他心煩或疲憊時會做的事", "taste": "他偏好的食物、飲品或氣味"},
@@ -1657,6 +1727,46 @@ ${DOSSIER_SPEC}`);
     } catch (e) {
         console.warn('[Nova無限流] 人生檔案生成失敗', e);
         toast('人生檔案生成失敗：' + (e.message || e) + '。可以到人物分頁按「生成人生檔案」重試。', 'warning');
+    }
+}
+
+// 選定路線後，在背景重新規劃個人線的幕
+async function genRouteActs() {
+    const cs = C();
+    const inst = cs?.instance;
+    const r = inst?.route;
+    if (!r?.lead) return;
+    const from = r.branch_act + 1;
+    const n = inst.total_acts - r.branch_act;
+    const prevMode = cs.mode;
+    cs.mode = 'instance';
+    const system = sub(buildAllRulesText() + '\n\n' + buildStateText());
+    cs.mode = prevMode;
+    const pathText = r.path === 'truth'
+        ? '真相線：她知道了真相，接下來的劇情是她如何拯救他、把他從黑暗裡拉回來，同時完成主線。'
+        : `暗墮線：他徹底暗墮，接下來的劇情是暗墮後的他如何把世界推向更深的混亂，她身在其中。第 ${r.stance_act} 幕結束時，她要再做一次選擇：阻止他，或跟著他。在那之前的幕不得預設她的立場。`;
+    const prompt = sub(`玩家在分歧點選擇了「${r.lead}」的個人線。${pathText}
+請重新規劃第 ${from} 幕到第 ${inst.total_acts} 幕（共 ${n} 幕），劇情只聚焦在這位男主身上；其他男主退到背景，但仍各自推進，並在終幕各有自己的結局。
+- 每幕的 day_end 依序遞增，最後一幕等於時限（${inst.time_limit_days || '依副本'} 天）。
+- 最後一幕是終幕，要讓她面對最終的抉擇。
+只輸出下列格式，不要輸出任何其他文字：
+<inf_route>[{"number": ${from}, "question": "本幕表層問題", "truth": "本幕真相", "twist": "解開後揭露的下一個問題", "emotion_focus": "本幕的情感重點", "day_end": 0, "milestone": "本幕結束時的里程碑"}]</inf_route>`);
+    toast('正在規劃個人線…', 'info');
+    try {
+        const raw = await genRaw(system, prompt, 8192);
+        const found = extractTags(String(raw || ''), 'inf_route').found;
+        let arr = parseJsonLoose(found[0] ?? raw);
+        if (arr && !Array.isArray(arr)) arr = arr.acts || [];
+        if (!Array.isArray(arr) || !arr.length) throw new Error('沒有拿到幕的資料');
+        const keep = inst.acts.filter(a => a.number <= r.branch_act);
+        const fresh = arr.map((a, i) => ({ number: Number(a.number) || from + i, question: a.question || '', truth: a.truth || '', twist: a.twist || '', emotion_focus: a.emotion_focus || '', day_end: Number(a.day_end) || 0, milestone: a.milestone || '', done: false }))
+            .filter(a => a.number > r.branch_act && a.number <= inst.total_acts);
+        inst.acts = [...keep, ...fresh];
+        commit();
+        toast(`個人線規劃好了：第 ${from}–${inst.total_acts} 幕`, 'success');
+    } catch (e) {
+        console.warn('[Nova無限流] 個人線規劃失敗', e);
+        toast('個人線規劃失敗：' + (e.message || e) + '。劇情仍可繼續，AI 會依路線自行推進。', 'warning');
     }
 }
 
@@ -1850,7 +1960,7 @@ function contactName(c) {
 function makeContacts(inst, end) {
     const letter = diffLetter(inst.difficulty);
     if (!['B', 'A', 'S'].includes(letter)) return 0;
-    if (/失敗|壞結局|滯留/.test(end.result || '') || end.exit_type === '強制召回') return 0;
+    if (/失敗|壞結局|滯留|弒他/.test(end.result || '') || end.exit_type === '強制召回') return 0;
     const cofall = /共墮/.test(end.result || '');
     const ph = P();
     const fates = Array.isArray(end.cast_fate) ? end.cast_fate : null;
@@ -2473,6 +2583,31 @@ function renderOverview() {
             <p class="nova-inf-hint">本幕進度 ${inst.act_progress}%${inst.time_limit_days ? `｜時限 ${fmtDays(inst.time_limit_days)}，剩餘 ${remain < 0 ? '<span class="nova-inf-warn">已超時</span>' : fmtDays(remain)}` : ''}${inst.real_time ? `｜現實約 ${esc(inst.real_time)}` : ''}</p>
             <p>本幕問題：${esc(inst.acts.find(a => a.number === inst.current_act)?.question || '—')}</p>`,
             btn('edit_basic', '編輯'));
+        if (inst.route) {
+            const rt = inst.route;
+            const steps = [];
+            for (let n = 1; n <= inst.total_acts; n++) {
+                const mark = n === rt.branch_act ? '🔀' : (rt.path === 'dark' && n === rt.stance_act ? '⚖' : (n === inst.total_acts ? '🏁' : ''));
+                const cls = n < inst.current_act ? 'done' : (n === inst.current_act ? 'now' : '');
+                steps.push(`<div class="nova-route-step ${cls} ${n === rt.branch_act ? 'branch' : ''}" title="${n === rt.branch_act ? '分歧點' : ''}"><span>${mark || n}</span><small>${n <= rt.branch_act ? '共通' : '個人'}</small></div>`);
+            }
+            const gate = routeGate(inst);
+            let body = `<div class="nova-route">${steps.join('')}</div>`;
+            if (!rt.lead) body += `<p class="nova-inf-hint">🔀 第 ${rt.branch_act} 幕是分歧點。${inst.current_act === rt.branch_act ? '<b>就是這一幕！</b>這一幕結束時要選擇路線。' : `還有 ${rt.branch_act - inst.current_act} 幕。`}</p>`;
+            else body += `<p>個人線：<b>${esc(routeLeadName(inst) || rt.lead)}</b>｜${rt.path === 'truth' ? '真相線' : '暗墮線'}${rt.stance ? `｜${rt.stance === 'stop' ? '阻止他' : '跟著他'}` : ''}</p>`;
+            if (gate === 'branch' || (!rt.lead && inst.current_act === rt.branch_act)) {
+                const leads = inst.cast.filter(c => c.role === '主要');
+                body += `<div class="nova-route-choose"><b>🔀 分歧點：要走誰的線？</b>
+                    ${leads.map(c => { const nm = c.revealed && c.real_name ? c.real_name : c.codename; return `<div class="nova-inf-item"><b>${esc(nm)}</b>${c.cover && !c.unmasked ? `<span class="nova-inf-sub">（${esc(c.cover)}）</span>` : ''}
+                        <div class="nova-inf-row">${btn('route_pick', '知道真相', `data-c="${esc(c.codename)}" data-p="truth"`, 'primary')}${btn('route_pick', '讓他暗墮', `data-c="${esc(c.codename)}" data-p="dark"`, 'danger')}</div></div>`; }).join('')}
+                    <p class="nova-inf-hint">選了之後就會進入他的個人線，其他男主退到背景。這個選擇無法反悔（滑動重生可以回到選擇之前）。</p></div>`;
+            }
+            if (gate === 'stance' || (rt.path === 'dark' && !rt.stance && inst.current_act === rt.stance_act)) {
+                body += `<div class="nova-route-choose"><b>⚖ 暗墮線的抉擇</b>
+                    <div class="nova-inf-row">${btn('route_stance', '阻止他', 'data-s="stop"', 'primary')}${btn('route_stance', '跟著他', 'data-s="follow"', 'danger')}</div></div>`;
+            }
+            h += card('劇情路線', body);
+        }
         if (inst.after_pollution > 0) {
             h += card('🩸 汙染後遺症', `
                 <div class="nova-inf-bar nova-inf-pollution"><div style="width:${inst.after_pollution}%"></div></div>
@@ -2511,7 +2646,7 @@ function renderOverview() {
             '想許現實願望的話，到「背包」分頁按「＋ 許願」記下來。',
             '在下方選擇下一步，可以直接在這個聊天繼續。',
         ]);
-        if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>${s.lastMain?.instance_id === inst.id && s.lastMain.residue ? `<p class="nova-inf-sub">留在你身上的殘留：${esc(s.lastMain.residue)}</p>` : ''}`);
+        if (inst) h += card(esc(inst.name), `<p>結果：<b>${esc(inst.status)}</b></p>${s.ledger[s.ledger.length - 1]?.instance_id === inst.id && s.ledger[s.ledger.length - 1].ending_reason ? `<p class="nova-inf-sub">為什麼是這個結局：${esc(s.ledger[s.ledger.length - 1].ending_reason)}</p>` : ''}${s.lastMain?.instance_id === inst.id && s.lastMain.residue ? `<p class="nova-inf-sub">留在你身上的殘留：${esc(s.lastMain.residue)}</p>` : ''}`);
         const lm = s.lastMain;
         const sideBtns = (lm?.cast || []).map(c =>
             btn('next_side', `看「${esc(c.revealed || peek ? (c.real_name || c.codename) : c.codename)}」的過去`, `data-c="${esc(c.codename)}"`)).join('');
@@ -2601,6 +2736,7 @@ function renderPeople() {
             ${c.inner_circle?.length ? `<div class="nova-inf-sub">身邊的人：${c.inner_circle.map(p => esc(p.name + '（' + p.relation + '）')).join('、')}</div>` : ''}
             ${c.anniversary?.label ? `<div class="nova-inf-sub">紀念日：第 ${esc(c.anniversary.day)} 天｜${esc(c.anniversary.label)}</div>` : ''}
             ${c.wound ? `<div class="nova-inf-sub">成長中的傷：${esc(c.wound)}</div>` : ''}
+            ${c.mortality ? `<div class="nova-inf-sub">生死：${esc(c.mortality)}</div>` : ''}
             ${c.courtship ? `<div class="nova-inf-sub">追求方式：${esc(c.courtship)}</div>` : ''}
             ${c.habits ? `<div class="nova-inf-sub">習慣：${esc(c.habits.hobby || '')}｜${esc((c.habits.quirks || []).join('、'))}</div>` : ''}
             ${c.offscreen?.length ? `<div class="nova-inf-sub">幕後：${esc(c.offscreen[c.offscreen.length - 1].progress)}</div>` : ''}
@@ -3199,6 +3335,29 @@ function onBodyClick(ev) {
             break;
         }
         case 'next_main': goNext({ kind: 'main' }); break;
+        case 'route_pick': {
+            if (!inst?.route) break;
+            const c = inst.cast.find(x => x.codename === b.dataset.c);
+            const nm = c ? (c.revealed && c.real_name ? c.real_name : c.codename) : b.dataset.c;
+            const path = b.dataset.p;
+            if (!confirm(`走「${nm}」的${path === 'truth' ? '真相線' : '暗墮線'}？`)) break;
+            inst.route.lead = b.dataset.c;
+            inst.route.path = path;
+            inst.route.phase = 'personal';
+            advanceAct();
+            commit();
+            toast(`進入「${nm}」的${path === 'truth' ? '真相線' : '暗墮線'}，在聊天中繼續劇情吧`, 'success');
+            genRouteActs();
+            break;
+        }
+        case 'route_stance': {
+            if (!inst?.route) break;
+            inst.route.stance = b.dataset.s;
+            advanceAct();
+            commit();
+            toast(b.dataset.s === 'stop' ? '你選擇阻止他' : '你選擇跟著他', 'success');
+            break;
+        }
         case 'revisit_go': {
             const r = (s.revisits || []).find(x => x.key === b.dataset.key);
             const cost = Number(s.revisitCost) || 0;

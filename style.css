@@ -456,3 +456,12 @@ details.nova-inf-more:not(.nova-inf-card) { margin-top: 6px; }
 .nova-batch-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-top: 1px dashed var(--SmartThemeBorderColor, #444); cursor: pointer; flex-wrap: wrap; }
 .nova-batch-row.on { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8ab4f8) 14%, transparent); border-radius: 6px; }
 .nova-batch-bar { position: sticky; top: -10px; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; margin: 8px 0; border-radius: 10px; background: var(--SmartThemeBlurTintColor, #1b1d23); border: 1px solid var(--SmartThemeQuoteColor, #8ab4f8); }
+
+/* ───── v0.21 劇情路線 ───── */
+.nova-route { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 8px; }
+.nova-route-step { flex: 1; min-width: 30px; text-align: center; padding: 4px 2px; border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor, #555); opacity: 0.5; }
+.nova-route-step small { display: block; font-size: 0.65em; opacity: 0.7; }
+.nova-route-step.done { opacity: 0.8; }
+.nova-route-step.now { opacity: 1; background: var(--SmartThemeQuoteColor, #8ab4f8); color: #111; border-color: transparent; font-weight: 700; }
+.nova-route-step.branch { border-color: #e5a24a; border-width: 2px; }
+.nova-route-choose { border: 2px solid #e5a24a; border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
